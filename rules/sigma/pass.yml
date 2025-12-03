@@ -1,8 +1,8 @@
 title: Detection - Malicious Process Example
-id: SIG-001-PASS2
+id: SIG-001-PASS23432434
 description: Detect a generated test log with ProcessName malicious.exe
 status: experimental
-author: CI Validator
+author: CI Validator New Test
 date: 2025-01-01
 logsource:
   category: process
