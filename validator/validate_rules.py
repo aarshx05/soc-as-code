@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Rule Validator - Automatically generates test logs based on rules and validates them
+Fixed version with improved log generation
 """
 import os
 import sys
@@ -37,13 +38,17 @@ class LogGenerator:
 
         # Generate matching logs
         for i in range(count):
-            log = {'_generated': True, '_test_id': str(i)}  # store as string to avoid .startswith issues
+            log = {'_generated': True, '_test_id': str(i)}
 
             # Pick the first selection to generate from
             first_selection = list(selections.values())[0]
 
             for field, pattern in first_selection.items():
-                log[field] = LogGenerator._generate_matching_value(pattern)
+                # Generate value that will actually match
+                generated_value = LogGenerator._generate_matching_value(pattern)
+                log[field] = generated_value
+                
+                print(f"      Generated field '{field}' = '{generated_value}' for pattern '{pattern}'")
 
             # Add some context fields
             log['timestamp'] = datetime.utcnow().isoformat() + 'Z'
@@ -78,16 +83,38 @@ class LogGenerator:
 
         pattern_str = str(pattern)
 
-        # Handle wildcards
-        if '*' in pattern_str or '?' in pattern_str:
-            # Replace wildcards with actual values
-            result = pattern_str.replace('*', 'example').replace('?', 'X')
-            return result
+        # Handle wildcards - generate a concrete example that will match
+        if '*' in pattern_str:
+            # For patterns like "*cmd.exe*", generate "test_cmd.exe_test"
+            # For patterns like "*.exe", generate "program.exe"
+            # For patterns like "cmd*", generate "cmd_test"
+            
+            if pattern_str.startswith('*') and pattern_str.endswith('*'):
+                # *middle* -> "prefix_middle_suffix"
+                middle = pattern_str.strip('*')
+                return f"prefix_{middle}_suffix" if middle else "test_value"
+            elif pattern_str.startswith('*'):
+                # *suffix -> "prefix_suffix"
+                suffix = pattern_str.lstrip('*')
+                return f"prefix_{suffix}" if suffix else "test_value"
+            elif pattern_str.endswith('*'):
+                # prefix* -> "prefix_suffix"
+                prefix = pattern_str.rstrip('*')
+                return f"{prefix}_suffix" if prefix else "test_value"
+            else:
+                # middle*part or part*middle -> replace * with underscore
+                return pattern_str.replace('*', '_match_')
+
+        # Handle question mark wildcards
+        if '?' in pattern_str:
+            # Replace ? with a single character
+            return pattern_str.replace('?', 'X')
 
         # Handle regex patterns (simplified)
         if '.*' in pattern_str:
-            result = pattern_str.replace('.*', 'matched_text')
-            return result
+            # For regex like ".*powershell.*", generate "test_powershell_test"
+            clean = pattern_str.replace('.*', '_').replace('^', '').replace('$', '')
+            return f"test{clean}test"
 
         # Return as-is for exact matches
         return pattern_str
@@ -118,7 +145,7 @@ class LogGenerator:
         for i in range(count):
             log = {
                 '_generated': True,
-                '_test_id': str(i),  # store as string
+                '_test_id': str(i),
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
                 'host': f'test-host-{i % 3}',
             }
@@ -192,6 +219,8 @@ class RuleValidator:
                 for log in test_logs:
                     f.write(json.dumps(log) + '\n')
 
+            print(f"    Generated {len(test_logs)} test logs")
+
             # Run simulator
             print(f"    Running simulator...")
             simulator = SOCSimulator(sigma_rules=rules, yara_path=None)
@@ -207,11 +236,14 @@ class RuleValidator:
             )
             actual_matches = len([a for a in alerts if a.get('rule_id') == rule_id])
 
+            print(f"    Expected matches: {expected_matches}")
+            print(f"    Actual matches: {actual_matches}")
+
             # Calculate detection rate
             detection_rate = (actual_matches / expected_matches * 100) if expected_matches > 0 else 0
 
-            # Determine pass/fail
-            passed = detection_rate >= 50  # At least 50% detection
+            # Determine pass/fail (50% threshold)
+            passed = detection_rate >= 50
 
             result = {
                 'rule_path': str(rule_path),
@@ -237,8 +269,15 @@ class RuleValidator:
             return result
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"    ✗ ERROR - {str(e)}")
-            return self._create_error_result(str(rule_path), str(e), rule_type='sigma', rule_title=rule.get('title') if 'rule' in locals() and isinstance(rule, dict) else None)
+            return self._create_error_result(
+                str(rule_path), 
+                str(e), 
+                rule_type='sigma',
+                rule_title=rule.get('title') if 'rule' in locals() and isinstance(rule, dict) else None
+            )
 
     def validate_yara_rule(self, rule_path: str) -> Dict[str, Any]:
         """Validate a single YARA rule"""
@@ -341,7 +380,7 @@ class RuleValidator:
         print(f"\n[+] Results saved to: {results_file}")
 
     def _create_markdown_summary(self):
-        """Create a markdown summary for PR comments (defensive)"""
+        """Create a markdown summary for PR comments"""
         summary_file = self.output_dir / 'summary.md'
 
         with open(summary_file, 'w', encoding='utf-8') as f:
@@ -361,7 +400,6 @@ class RuleValidator:
             f.write("## Detailed Results\n\n")
 
             for detail in self.results.get('details', []):
-                # Defensive access to fields
                 passed = detail.get('passed', False)
                 status = "✅ PASSED" if passed else "❌ FAILED"
                 rule_title = detail.get('rule_title') or detail.get('rule_id') or "Unknown"
