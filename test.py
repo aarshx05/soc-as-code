@@ -711,4 +711,14 @@ def main_cli(argv=None):
         level_order = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
         threshold = level_order.get(args.fail_on_severity, 2)
         for a in alerts:
-            sev = a['severity
+            sev = a['severity'].lower() if isinstance(a.get('severity'), str) else 'medium'
+            if level_order.get(sev, 2) >= threshold:
+                print(f"Failing because alert {a['rule_id']} severity={a['severity']}")
+                return 2
+
+    return 0
+
+
+if __name__ == '__main__':
+    rc = main_cli()
+    sys.exit(rc)
