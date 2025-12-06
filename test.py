@@ -1,29 +1,8 @@
 """
-SOC Simulator (SOC-as-Code) - Enhanced version with built-in test examples and synthetic data generator
+SOC Simulator (SOC-as-Code) - Fixed version with corrected wildcard matching
 
-Features (kept and amplified):
-- Ingest JSON logs from files (JSON array or line-delimited JSON)
-- Simplified Sigma rule engine with named selections and boolean `condition` support
-- Robust matching: nested keys (dot notation), regex, wildcard (*, ?), lists of patterns
-- Optional YARA integration (if `yara` python package installed)
-- `--run-samples` mode: creates a temporary workspace with sample logs/rules/yara and runs assertions
-- NEW: `--generate-synthetic` mode: generate synthetic logs, sigma rules, and optional yara file in a directory for load or fuzz testing
-- CLI useful for CI/CD: outputs `alerts.json` and `metrics.json`, supports `--fail-on-severity`
-
-Usage:
-  pip install pyyaml
-  # optional for yara
-  pip install yara-python
-
-Run built-in samples (quick test):
-  python soc_simulator.py --run-samples
-
-Generate synthetic workspace (inspect files):
-  python soc_simulator.py --generate-synthetic ./workspace --count 200 --yara
-
-Run simulator against logs:
-  python soc_simulator.py --logs ./workspace/logs --sigma ./workspace/rules/sigma_rules.yml --yara ./workspace/yara/malicious.yar
-
+Key fix: Wildcard patterns (* and ?) are now checked BEFORE regex patterns
+to prevent misinterpreting wildcards as regex metacharacters.
 """
 
 from __future__ import annotations
@@ -167,10 +146,19 @@ class SigmaRule:
 
     @staticmethod
     def _is_regex_pattern(s: str) -> bool:
-        # detect regex-like strings (contains regex meta chars)
+        """Detect regex-like strings but exclude simple wildcards"""
         if not isinstance(s, str):
             return False
-        return any(ch in s for ch in r".*^$[]()\\")
+        # If it has simple wildcards (* or ?) but no other regex chars, it's a wildcard, not regex
+        if '*' in s or '?' in s:
+            # Check if it has OTHER regex metacharacters besides * and ?
+            other_regex_chars = ['.', '^', '$', '[', ']', '(', ')', '\\', '|', '+', '{', '}']
+            has_other_regex = any(ch in s for ch in other_regex_chars)
+            if not has_other_regex:
+                return False  # It's just wildcards, not regex
+        
+        # Check for actual regex patterns
+        return any(ch in s for ch in r".*^$[]()\\|+{}")
 
     @classmethod
     def _match_value(cls, pattern: Any, value: Any) -> bool:
@@ -187,18 +175,25 @@ class SigmaRule:
         val = '' if value is None else str(value)
         patt = '' if pattern is None else str(pattern)
 
-        # regex
+        # CRITICAL FIX: Check wildcards BEFORE regex
+        # wildcard (*, ?) - must be checked first to avoid misinterpreting as regex
+        if '*' in patt or '?' in patt:
+            # Check if it's ONLY wildcards (no regex chars like ., ^, $, etc.)
+            other_regex_chars = ['.', '^', '$', '[', ']', '(', ')', '\\', '|', '+', '{', '}']
+            is_pure_wildcard = not any(ch in patt for ch in other_regex_chars)
+            
+            if is_pure_wildcard:
+                # Pure wildcard pattern - convert to regex
+                re_p = '^' + re.escape(patt).replace(r'\*', '.*').replace(r'\?', '.') + '$'
+                try:
+                    return re.search(re_p, val, flags=re.IGNORECASE) is not None
+                except re.error:
+                    return patt.lower() == val.lower()
+
+        # regex (only if it has actual regex metacharacters)
         if cls._is_regex_pattern(patt):
             try:
                 return re.search(patt, val, flags=re.IGNORECASE) is not None
-            except re.error:
-                return patt.lower() == val.lower()
-
-        # wildcard (*, ?)
-        if '*' in patt or '?' in patt:
-            re_p = '^' + re.escape(patt).replace(r'\*', '.*').replace(r'\?', '.') + '$'
-            try:
-                return re.search(re_p, val, flags=re.IGNORECASE) is not None
             except re.error:
                 return patt.lower() == val.lower()
 
@@ -716,14 +711,4 @@ def main_cli(argv=None):
         level_order = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
         threshold = level_order.get(args.fail_on_severity, 2)
         for a in alerts:
-            sev = a['severity'].lower() if isinstance(a.get('severity'), str) else 'medium'
-            if level_order.get(sev, 2) >= threshold:
-                print(f"Failing because alert {a['rule_id']} severity={a['severity']}")
-                return 2
-
-    return 0
-
-
-if __name__ == '__main__':
-    rc = main_cli()
-    sys.exit(rc)
+            sev = a['severity
