@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Rule Validator - Automatically generates test logs based on rules and validates them
-Fixed version with improved log generation
+Enhanced with debugging for pattern matching issues
 """
 import os
 import sys
@@ -15,7 +15,7 @@ from collections import defaultdict
 
 # Import the SOC simulator components
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test import SOCSimulator, LogIngestor, load_sigma_rules
+from test import SOCSimulator, LogIngestor, load_sigma_rules, SigmaRule
 
 
 class LogGenerator:
@@ -45,10 +45,11 @@ class LogGenerator:
 
             for field, pattern in first_selection.items():
                 # Generate value that will actually match
-                generated_value = LogGenerator._generate_matching_value(pattern)
+                generated_value = LogGenerator._generate_matching_value(pattern, i)
                 log[field] = generated_value
                 
-                print(f"      Generated field '{field}' = '{generated_value}' for pattern '{pattern}'")
+                if i < 3:  # Only print first 3 for brevity
+                    print(f"      Generated field '{field}' = '{generated_value}' for pattern '{pattern}'")
 
             # Add some context fields
             log['timestamp'] = datetime.utcnow().isoformat() + 'Z'
@@ -72,11 +73,11 @@ class LogGenerator:
         return logs
 
     @staticmethod
-    def _generate_matching_value(pattern: Any) -> Any:
+    def _generate_matching_value(pattern: Any, index: int = 0) -> Any:
         """Generate a value that matches the given pattern"""
         if isinstance(pattern, list):
-            # Pick the first option
-            pattern = pattern[0]
+            # Pick different options for variety
+            pattern = pattern[index % len(pattern)]
 
         if isinstance(pattern, (int, bool)):
             return pattern
@@ -85,22 +86,34 @@ class LogGenerator:
 
         # Handle wildcards - generate a concrete example that will match
         if '*' in pattern_str:
-            # For patterns like "*cmd.exe*", generate "test_cmd.exe_test"
-            # For patterns like "*.exe", generate "program.exe"
-            # For patterns like "cmd*", generate "cmd_test"
+            # For patterns like "*cmd.exe*", we need to generate something that contains "cmd.exe"
+            # The pattern *cmd.exe* means: anything, then "cmd.exe", then anything
             
             if pattern_str.startswith('*') and pattern_str.endswith('*'):
-                # *middle* -> "prefix_middle_suffix"
+                # *middle* -> just include the middle part with some surrounding text
                 middle = pattern_str.strip('*')
-                return f"prefix_{middle}_suffix" if middle else "test_value"
+                if middle:
+                    # Generate variations for better coverage
+                    variations = [
+                        middle,  # Just the pattern itself
+                        f"prefix_{middle}",  # With prefix
+                        f"{middle}_suffix",  # With suffix
+                        f"test_{middle}_end",  # With both
+                    ]
+                    return variations[index % len(variations)]
+                return "test_value"
             elif pattern_str.startswith('*'):
-                # *suffix -> "prefix_suffix"
+                # *suffix -> just the suffix or with prefix
                 suffix = pattern_str.lstrip('*')
-                return f"prefix_{suffix}" if suffix else "test_value"
+                if suffix:
+                    return suffix if index % 2 == 0 else f"prefix_{suffix}"
+                return "test_value"
             elif pattern_str.endswith('*'):
-                # prefix* -> "prefix_suffix"
+                # prefix* -> just the prefix or with suffix
                 prefix = pattern_str.rstrip('*')
-                return f"{prefix}_suffix" if prefix else "test_value"
+                if prefix:
+                    return prefix if index % 2 == 0 else f"{prefix}_suffix"
+                return "test_value"
             else:
                 # middle*part or part*middle -> replace * with underscore
                 return pattern_str.replace('*', '_match_')
@@ -208,6 +221,9 @@ class RuleValidator:
 
             print(f"    Rule ID: {rule_id}")
             print(f"    Title: {rule_title}")
+            
+            # Debug: Print the rule detection logic
+            print(f"    Detection config: {json.dumps(rule.get('detection', {}), indent=6)}")
 
             # Generate test logs
             print(f"    Generating test logs...")
@@ -220,6 +236,15 @@ class RuleValidator:
                     f.write(json.dumps(log) + '\n')
 
             print(f"    Generated {len(test_logs)} test logs")
+            
+            # Debug: Test the rule manually on first few logs
+            print(f"    Testing rule matching manually on first 3 logs...")
+            sigma_rule_obj = SigmaRule(rule)
+            for i, log in enumerate(test_logs[:3]):
+                matched = sigma_rule_obj.matches(log)
+                print(f"      Log {i}: {matched is not None} - Fields in log: {list(log.keys())}")
+                if matched is None:
+                    print(f"        Log content: {json.dumps(log, indent=8)}")
 
             # Run simulator
             print(f"    Running simulator...")
@@ -238,6 +263,11 @@ class RuleValidator:
 
             print(f"    Expected matches: {expected_matches}")
             print(f"    Actual matches: {actual_matches}")
+            
+            if actual_matches == 0 and expected_matches > 0:
+                print(f"    WARNING: No matches detected. Checking first test log...")
+                if test_logs:
+                    print(f"    First log: {json.dumps(test_logs[0], indent=6)}")
 
             # Calculate detection rate
             detection_rate = (actual_matches / expected_matches * 100) if expected_matches > 0 else 0
