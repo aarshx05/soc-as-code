@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Rule Validator - Automatically generates test logs based on rules and validates them
-Enhanced with debugging for pattern matching issues
+Rule Validator - Enhanced version with advanced log generation
+Handles regex, wildcards, nested fields, NULL values, and complex patterns
 """
 import os
 import sys
 import json
 import yaml
 import argparse
+import re
+import random
+import string
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from datetime import datetime
@@ -18,8 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from test import SOCSimulator, LogIngestor, load_sigma_rules, SigmaRule
 
 
-class LogGenerator:
-    """Generates synthetic logs designed to match specific rules"""
+class EnhancedLogGenerator:
+    """Enhanced log generator that handles complex patterns including regex, wildcards, and nested fields"""
 
     @staticmethod
     def generate_for_sigma_rule(rule: Dict[str, Any], count: int = 10) -> List[Dict[str, Any]]:
@@ -29,9 +32,15 @@ class LogGenerator:
 
         # Extract all selection criteria
         selections = {}
+        filters = {}
         for key, value in detection.items():
-            if key != 'condition' and isinstance(value, dict):
-                selections[key] = value
+            if key == 'condition':
+                continue
+            if isinstance(value, dict):
+                if key.startswith('filter'):
+                    filters[key] = value
+                else:
+                    selections[key] = value
 
         if not selections:
             return logs
@@ -45,8 +54,13 @@ class LogGenerator:
 
             for field, pattern in first_selection.items():
                 # Generate value that will actually match
-                generated_value = LogGenerator._generate_matching_value(pattern, i)
-                log[field] = generated_value
+                generated_value = EnhancedLogGenerator._generate_matching_value(field, pattern, i)
+                
+                # Handle nested field paths (e.g., "process.command_line")
+                if '.' in field:
+                    EnhancedLogGenerator._set_nested_field(log, field, generated_value)
+                else:
+                    log[field] = generated_value
                 
                 if i < 3:  # Only print first 3 for brevity
                     print(f"      Generated field '{field}' = '{generated_value}' for pattern '{pattern}'")
@@ -73,64 +87,157 @@ class LogGenerator:
         return logs
 
     @staticmethod
-    def _generate_matching_value(pattern: Any, index: int = 0) -> Any:
-        """Generate a value that matches the given pattern"""
+    def _set_nested_field(log: Dict[str, Any], field_path: str, value: Any):
+        """Set a value in a nested dictionary structure"""
+        parts = field_path.split('.')
+        current = log
+        
+        for i, part in enumerate(parts[:-1]):
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        
+        current[parts[-1]] = value
+
+    @staticmethod
+    def _generate_matching_value(field: str, pattern: Any, index: int = 0) -> Any:
+        """Generate a value that matches the given pattern (enhanced version)"""
         if isinstance(pattern, list):
             # Pick different options for variety
             pattern = pattern[index % len(pattern)]
 
-        if isinstance(pattern, (int, bool)):
+        # Handle NULL patterns
+        if pattern is None:
+            return None
+
+        # Handle boolean patterns
+        if isinstance(pattern, bool):
+            return pattern
+
+        # Handle numeric patterns
+        if isinstance(pattern, int):
             return pattern
 
         pattern_str = str(pattern)
 
-        # Handle wildcards - generate a concrete example that will match
-        if '*' in pattern_str:
-            # For patterns like "*cmd.exe*", we need to generate something that contains "cmd.exe"
-            # The pattern *cmd.exe* means: anything, then "cmd.exe", then anything
-            
-            if pattern_str.startswith('*') and pattern_str.endswith('*'):
-                # *middle* -> just include the middle part with some surrounding text
-                middle = pattern_str.strip('*')
-                if middle:
-                    # Generate variations for better coverage
-                    variations = [
-                        middle,  # Just the pattern itself
-                        f"prefix_{middle}",  # With prefix
-                        f"{middle}_suffix",  # With suffix
-                        f"test_{middle}_end",  # With both
-                    ]
-                    return variations[index % len(variations)]
-                return "test_value"
-            elif pattern_str.startswith('*'):
-                # *suffix -> just the suffix or with prefix
-                suffix = pattern_str.lstrip('*')
-                if suffix:
-                    return suffix if index % 2 == 0 else f"prefix_{suffix}"
-                return "test_value"
-            elif pattern_str.endswith('*'):
-                # prefix* -> just the prefix or with suffix
-                prefix = pattern_str.rstrip('*')
-                if prefix:
-                    return prefix if index % 2 == 0 else f"{prefix}_suffix"
-                return "test_value"
-            else:
-                # middle*part or part*middle -> replace * with underscore
-                return pattern_str.replace('*', '_match_')
+        # REGEX PATTERN DETECTION
+        # Check if it looks like a regex pattern (contains .*, .+, ^, $, [], etc.)
+        if EnhancedLogGenerator._is_regex_pattern(pattern_str):
+            return EnhancedLogGenerator._generate_from_regex(pattern_str, index)
 
-        # Handle question mark wildcards
-        if '?' in pattern_str:
-            # Replace ? with a single character
-            return pattern_str.replace('?', 'X')
+        # WILDCARD PATTERNS (* and ?)
+        if '*' in pattern_str or '?' in pattern_str:
+            return EnhancedLogGenerator._generate_from_wildcard(pattern_str, index)
 
-        # Handle regex patterns (simplified)
-        if '.*' in pattern_str:
-            # For regex like ".*powershell.*", generate "test_powershell_test"
-            clean = pattern_str.replace('.*', '_').replace('^', '').replace('$', '')
-            return f"test{clean}test"
-
-        # Return as-is for exact matches
+        # EXACT MATCH - return as-is
         return pattern_str
+
+    @staticmethod
+    def _is_regex_pattern(s: str) -> bool:
+        """Check if string looks like a regex pattern"""
+        regex_indicators = ['.*', '.+', '^', '$', '[', ']', '(', ')', '|', '\\d', '\\w', '\\s']
+        return any(indicator in s for indicator in regex_indicators)
+
+    @staticmethod
+    def _generate_from_regex(pattern: str, index: int) -> str:
+        """Generate a string that matches a regex pattern"""
+        # Remove anchors for simplicity
+        pattern = pattern.replace('^', '').replace('$', '')
+        
+        # Handle common regex patterns
+        result = pattern
+        
+        # Replace .* with random text
+        if '.*' in result:
+            parts = result.split('.*')
+            result = f"text{index}_".join(parts)
+        
+        # Replace .+ with random text
+        if '.+' in result:
+            parts = result.split('.+')
+            result = f"text{index}".join(parts)
+        
+        # Replace \d+ with numbers
+        result = re.sub(r'\\d\+', lambda m: str(random.randint(100, 999)), result)
+        result = re.sub(r'\\d', lambda m: str(random.randint(0, 9)), result)
+        
+        # Replace \w+ with alphanumeric
+        result = re.sub(r'\\w\+', lambda m: ''.join(random.choices(string.ascii_letters, k=8)), result)
+        result = re.sub(r'\\w', lambda m: random.choice(string.ascii_letters), result)
+        
+        # Handle character classes [A-Za-z0-9]
+        def replace_char_class(match):
+            char_class = match.group(0)
+            if '[A-Za-z0-9+/]' in char_class:
+                # Base64-like pattern
+                base64_chars = string.ascii_letters + string.digits + '+/'
+                length = 20  # Default length
+                if '{' in pattern:
+                    # Extract length from {n,m}
+                    length_match = re.search(r'\{(\d+),?(\d+)?\}', pattern)
+                    if length_match:
+                        length = int(length_match.group(1))
+                return ''.join(random.choices(base64_chars, k=length))
+            elif '[A-Za-z]' in char_class:
+                return ''.join(random.choices(string.ascii_letters, k=5))
+            elif '[0-9]' in char_class:
+                return ''.join(random.choices(string.digits, k=5))
+            return 'X'
+        
+        result = re.sub(r'\[[^\]]+\]\{\d+,?\d*\}', replace_char_class, result)
+        result = re.sub(r'\[[^\]]+\]', replace_char_class, result)
+        
+        # Handle quantifiers {n,m}
+        result = re.sub(r'\{(\d+),?\d*\}', '', result)
+        
+        # Clean up any remaining regex syntax
+        result = result.replace('\\', '')
+        
+        return result
+
+    @staticmethod
+    def _generate_from_wildcard(pattern: str, index: int) -> str:
+        """Generate a string that matches a wildcard pattern"""
+        # For patterns like "*cmd.exe*", we generate variations
+        if pattern.startswith('*') and pattern.endswith('*'):
+            # *middle* -> generate with prefix/suffix
+            middle = pattern.strip('*')
+            if middle:
+                variations = [
+                    middle,  # Just the pattern itself
+                    f"prefix_{middle}",  # With prefix
+                    f"{middle}_suffix",  # With suffix
+                    f"test_{middle}_end",  # With both
+                ]
+                return variations[index % len(variations)]
+            return "test_value"
+        
+        elif pattern.startswith('*'):
+            # *suffix -> generate with optional prefix
+            suffix = pattern.lstrip('*')
+            if suffix:
+                return suffix if index % 2 == 0 else f"prefix_{suffix}"
+            return "test_value"
+        
+        elif pattern.endswith('*'):
+            # prefix* -> generate with optional suffix
+            prefix = pattern.rstrip('*')
+            if prefix:
+                return prefix if index % 2 == 0 else f"{prefix}_suffix"
+            return "test_value"
+        
+        # Handle ? wildcards (single character)
+        if '?' in pattern:
+            # Replace each ? with a random character
+            result = ""
+            for char in pattern:
+                if char == '?':
+                    result += random.choice(string.ascii_lowercase)
+                else:
+                    result += char
+            return result
+        
+        return pattern
 
     @staticmethod
     def generate_for_yara_rule(rule_content: str, count: int = 10) -> List[Dict[str, Any]]:
@@ -149,7 +256,6 @@ class LogGenerator:
                 if line.startswith('condition:'):
                     break
                 if '=' in line and '"' in line:
-                    # Extract string value
                     parts = line.split('"')
                     if len(parts) >= 2:
                         strings.append(parts[1])
@@ -163,7 +269,6 @@ class LogGenerator:
                 'host': f'test-host-{i % 3}',
             }
 
-            # Include the matched strings in message or payload
             if strings:
                 log['message'] = f'Test message containing {strings[0]}'
                 log['payload'] = ' '.join(strings[:2]) if len(strings) > 1 else strings[0]
@@ -225,9 +330,9 @@ class RuleValidator:
             # Debug: Print the rule detection logic
             print(f"    Detection config: {json.dumps(rule.get('detection', {}), indent=6)}")
 
-            # Generate test logs
+            # Generate test logs using enhanced generator
             print(f"    Generating test logs...")
-            test_logs = LogGenerator.generate_for_sigma_rule(rule, count=20)
+            test_logs = EnhancedLogGenerator.generate_for_sigma_rule(rule, count=20)
 
             # Save test logs
             test_log_file = self.output_dir / f"test_logs_{rule_id}.jsonl"
@@ -242,8 +347,8 @@ class RuleValidator:
             sigma_rule_obj = SigmaRule(rule)
             for i, log in enumerate(test_logs[:3]):
                 matched = sigma_rule_obj.matches(log)
-                print(f"      Log {i}: {matched is not None} - Fields in log: {list(log.keys())}")
-                if matched is None:
+                print(f"      Log {i}: {matched is not None}")
+                if matched is None and i < 3:
                     print(f"        Log content: {json.dumps(log, indent=8)}")
 
             # Run simulator
@@ -265,9 +370,7 @@ class RuleValidator:
             print(f"    Actual matches: {actual_matches}")
             
             if actual_matches == 0 and expected_matches > 0:
-                print(f"    WARNING: No matches detected. Checking first test log...")
-                if test_logs:
-                    print(f"    First log: {json.dumps(test_logs[0], indent=6)}")
+                print(f"    WARNING: No matches detected!")
 
             # Calculate detection rate
             detection_rate = (actual_matches / expected_matches * 100) if expected_matches > 0 else 0
@@ -333,7 +436,7 @@ class RuleValidator:
 
             # Generate test logs
             print(f"    Generating test logs...")
-            test_logs = LogGenerator.generate_for_yara_rule(rule_content, count=20)
+            test_logs = EnhancedLogGenerator.generate_for_yara_rule(rule_content, count=20)
 
             # Save test logs
             test_log_file = self.output_dir / f"test_logs_{rule_name}.jsonl"
@@ -387,7 +490,7 @@ class RuleValidator:
             return self._create_error_result(str(rule_path), str(e), rule_type='yara')
 
     def _create_error_result(self, rule_path: str, error: str, rule_type: str = "unknown", rule_title: str = None) -> Dict[str, Any]:
-        """Create an error result and ensure shape matches successful results"""
+        """Create an error result"""
         self.results['total_failed'] += 1
         return {
             'rule_path': rule_path,
@@ -419,14 +522,12 @@ class RuleValidator:
             total_tested = self.results.get('total_passed', 0) + self.results.get('total_failed', 0)
             pass_rate = (self.results.get('total_passed', 0) / total_tested * 100) if total_tested > 0 else 0
 
-            # Summary stats
             f.write("## Summary\n\n")
             f.write(f"- **Total Rules Tested:** {total_tested}\n")
             f.write(f"- **Passed:** ✅ {self.results.get('total_passed', 0)}\n")
             f.write(f"- **Failed:** ❌ {self.results.get('total_failed', 0)}\n")
             f.write(f"- **Pass Rate:** {pass_rate:.1f}%\n\n")
 
-            # Detailed results
             f.write("## Detailed Results\n\n")
 
             for detail in self.results.get('details', []):
