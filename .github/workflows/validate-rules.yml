@@ -32,37 +32,29 @@ jobs:
       - name: Detect changed rules
         id: changed-rules
         run: |
-          # List changed files between last two commits
           git diff --name-only HEAD~1 HEAD > changed_files.txt || true
           echo "Changed files:"
           cat changed_files.txt || true
-
-          # Extract changed Sigma rules
+          
           SIGMA_RULES=$(grep -E "^rules/sigma/.*\.(yml|yaml)$" changed_files.txt | tr '\n' ',' || echo "")
           echo "sigma_rules=${SIGMA_RULES}" >> $GITHUB_OUTPUT
-
-          # Extract changed YARA rules
+          
           YARA_RULES=$(grep -E "^rules/yara/.*\.(yara|yar)$" changed_files.txt | tr '\n' ',' || echo "")
           echo "yara_rules=${YARA_RULES}" >> $GITHUB_OUTPUT
-
-          # Check if any rules changed
+          
           if [ -z "$SIGMA_RULES" ] && [ -z "$YARA_RULES" ]; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
           
-          # Display what changed
           if [ -n "$SIGMA_RULES" ]; then
-            echo "📝 Changed Sigma rules: $SIGMA_RULES"
+            echo "Changed Sigma rules: $SIGMA_RULES"
           fi
           if [ -n "$YARA_RULES" ]; then
-            echo "📝 Changed YARA rules: $YARA_RULES"
+            echo "Changed YARA rules: $YARA_RULES"
           fi
 
-      # ============================================================================
-      # STEP 0a: Generate synthetic logs from OLD rules (baseline test data)
-      # ============================================================================
       - name: Generate synthetic logs from OLD rules
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -70,38 +62,29 @@ jobs:
           echo "STEP 0a: Generating synthetic logs from OLD rules"
           echo "============================================================"
           
-          # Save current state
           git stash
-          
-          # Checkout previous commit to get old rules
           git checkout HEAD~1
           
-          echo "📂 Checking OLD rule directory..."
+          echo "Checking OLD rule directory..."
           ls -la rules/sigma/ 2>/dev/null || echo "No Sigma rules found"
           
-          # Generate logs from old rules if directory exists
           if [ -d "rules/sigma" ]; then
             python validator/generate_logs.py \
               --rules-dir rules/sigma \
               --output-dir synthetic_logs/baseline \
               --log-count 100
-            
-            echo "✅ Generated baseline logs from OLD rules"
+            echo "Generated baseline logs from OLD rules"
           else
-            echo "⚠️  No OLD Sigma rules found, creating empty baseline"
+            echo "No OLD Sigma rules found, creating empty baseline"
             mkdir -p synthetic_logs/baseline
             touch synthetic_logs/baseline/empty.jsonl
           fi
           
-          # Return to current commit
           git checkout -
           git stash pop || true
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # STEP 0b: Generate synthetic logs from NEW rules (test data for new rules)
-      # ============================================================================
       - name: Generate synthetic logs from NEW rules
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -109,55 +92,47 @@ jobs:
           echo "STEP 0b: Generating synthetic logs from NEW rules"
           echo "============================================================"
           
-          # Create temp directory for new rules only
           mkdir -p new_rules_temp
           
-          # Copy changed Sigma rules
           IFS=',' read -ra SIGMA_ARRAY <<< "${{ steps.changed-rules.outputs.sigma_rules }}"
           NEW_RULE_COUNT=0
           
           for rule in "${SIGMA_ARRAY[@]}"; do
-            rule=$(echo "$rule" | xargs)  # Trim whitespace
+            rule=$(echo "$rule" | xargs)
             if [ -n "$rule" ] && [ -f "$rule" ]; then
-              echo "📋 Copying new Sigma rule: $rule"
+              echo "Copying new Sigma rule: $rule"
               cp "$rule" new_rules_temp/
               NEW_RULE_COUNT=$((NEW_RULE_COUNT + 1))
             fi
           done
           
-          # Copy changed YARA rules
           IFS=',' read -ra YARA_ARRAY <<< "${{ steps.changed-rules.outputs.yara_rules }}"
           for rule in "${YARA_ARRAY[@]}"; do
-            rule=$(echo "$rule" | xargs)  # Trim whitespace
+            rule=$(echo "$rule" | xargs)
             if [ -n "$rule" ] && [ -f "$rule" ]; then
-              echo "📋 Copying new YARA rule: $rule"
+              echo "Copying new YARA rule: $rule"
               cp "$rule" new_rules_temp/
               NEW_RULE_COUNT=$((NEW_RULE_COUNT + 1))
             fi
           done
           
-          echo "📊 Total new rules to test: $NEW_RULE_COUNT"
+          echo "Total new rules to test: $NEW_RULE_COUNT"
           
-          # Generate logs specifically for new rules
           if [ -n "$(ls -A new_rules_temp 2>/dev/null)" ]; then
-            echo "🔄 Generating synthetic logs for NEW rules..."
+            echo "Generating synthetic logs for NEW rules..."
             python validator/generate_logs.py \
               --rules-dir new_rules_temp \
               --output-dir synthetic_logs/new_rules \
               --log-count 50
-            
-            echo "✅ Generated logs for NEW rules"
+            echo "Generated logs for NEW rules"
           else
-            echo "⚠️  No new rules to generate logs for"
+            echo "No new rules to generate logs for"
             mkdir -p synthetic_logs/new_rules
             touch synthetic_logs/new_rules/empty.jsonl
           fi
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # STEP 0c: Combine baseline and new rule logs into one comprehensive dataset
-      # ============================================================================
       - name: Combine synthetic logs
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -167,44 +142,34 @@ jobs:
           
           mkdir -p synthetic_logs/combined
           
-          # Count logs before combining
           BASELINE_LOGS=$(find synthetic_logs/baseline -name "*.jsonl" -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}' || echo "0")
           NEW_LOGS=$(find synthetic_logs/new_rules -name "*.jsonl" -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}' || echo "0")
           
-          echo "📊 Baseline logs: $BASELINE_LOGS"
-          echo "📊 New rule logs: $NEW_LOGS"
+          echo "Baseline logs: $BASELINE_LOGS"
+          echo "New rule logs: $NEW_LOGS"
           
-          # Combine all logs into one file
           cat synthetic_logs/baseline/*.jsonl > synthetic_logs/combined/all_logs.jsonl 2>/dev/null || touch synthetic_logs/combined/all_logs.jsonl
           cat synthetic_logs/new_rules/*.jsonl >> synthetic_logs/combined/all_logs.jsonl 2>/dev/null || true
           
-          # Count total combined logs
           TOTAL_LOGS=$(wc -l < synthetic_logs/combined/all_logs.jsonl || echo "0")
-          echo "📊 Total combined logs: $TOTAL_LOGS"
+          echo "Total combined logs: $TOTAL_LOGS"
           
           if [ "$TOTAL_LOGS" -eq 0 ]; then
-            echo "⚠️  WARNING: No logs generated! This may cause false NEUTRAL results."
+            echo "WARNING: No logs generated"
           else
-            echo "✅ Successfully combined synthetic logs"
+            echo "Successfully combined synthetic logs"
           fi
 
-      # ============================================================================
-      # STEP 1: Validate OLD rules against combined logs (baseline)
-      # ============================================================================
-      - name: Validate OLD rules (baseline)
+      - name: Validate OLD rules baseline
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
           echo "============================================================"
           echo "STEP 1: Validating OLD rules (baseline)"
           echo "============================================================"
           
-          # Save current state
           git stash
-          
-          # Checkout previous commit to get old rules
           git checkout HEAD~1
           
-          # Run validation with old rules only
           python validator/validate_rules.py \
             --all-sigma-rules rules/sigma \
             --all-yara-rules rules/yara \
@@ -212,25 +177,20 @@ jobs:
             --output-dir validation_results/baseline \
             --mode baseline
           
-          echo "✅ Baseline validation complete"
+          echo "Baseline validation complete"
           
-          # Return to current commit
           git checkout -
           git stash pop || true
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # STEP 2: Validate NEW rules (old + new) against combined logs
-      # ============================================================================
-      - name: Validate NEW rules (current)
+      - name: Validate NEW rules current
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
           echo "============================================================"
           echo "STEP 2: Validating NEW rules (old + new)"
           echo "============================================================"
           
-          # Run validation with all current rules (including new ones)
           python validator/validate_rules.py \
             --all-sigma-rules rules/sigma \
             --all-yara-rules rules/yara \
@@ -238,13 +198,10 @@ jobs:
             --output-dir validation_results/current \
             --mode current
           
-          echo "✅ Current validation complete"
+          echo "Current validation complete"
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # STEP 3: Compare baseline vs current and classify new rules
-      # ============================================================================
       - name: Compare and classify new rules
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -252,16 +209,14 @@ jobs:
           echo "STEP 3: Comparing baseline vs current"
           echo "============================================================"
           
-          # Show detection files for debugging
-          echo "📊 Checking detection files..."
+          echo "Checking detection files..."
           echo "Baseline detections:"
           ls -lh validation_results/baseline/detections.json || echo "  Not found"
           echo "Current detections:"
           ls -lh validation_results/current/detections.json || echo "  Not found"
           
-          # Show sample detections
           if [ -f "validation_results/current/detections.json" ]; then
-            echo "📄 Sample current detections (first 3):"
+            echo "Sample current detections (first 3):"
             head -50 validation_results/current/detections.json
           fi
           
@@ -273,13 +228,10 @@ jobs:
             --output-file validation_results/classification_report.json \
             --debug
           
-          echo "✅ Classification complete"
+          echo "Classification complete"
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # STEP 4: Check validation results and rule quality
-      # ============================================================================
       - name: Check validation results and rule quality
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -292,9 +244,6 @@ jobs:
             --classification-report validation_results/classification_report.json \
             --fail-on-bad-rules true
 
-      # ============================================================================
-      # Generate human-readable summary report
-      # ============================================================================
       - name: Generate summary report
         if: always() && steps.changed-rules.outputs.has_changes == 'true'
         run: |
@@ -302,39 +251,34 @@ jobs:
           echo "Generating summary report"
           echo "============================================================"
           
-          # Check if classification report exists before generating summary
           if [ -f "validation_results/classification_report.json" ]; then
             python validator/generate_report.py \
               --classification-report validation_results/classification_report.json \
               --output-file validation_results/SUMMARY.md
-            
-            echo "✅ Report generated"
+            echo "Report generated"
           else
-            echo "⚠️  Classification report not found, creating minimal summary"
+            echo "Classification report not found, creating minimal summary"
             mkdir -p validation_results
-            cat > validation_results/SUMMARY.md << 'EOF'
-# Validation Summary
-
-**Status:** Incomplete
-
-The validation process did not complete successfully. Please check the workflow logs for errors.
-
-## Possible Issues:
-- No rules were changed
-- Error in synthetic log generation
-- Error in rule validation
-- Error in comparison/classification
-
-Please review the GitHub Actions logs for detailed error messages.
-EOF
-            echo "⚠️ Created minimal summary report"
+            cat > validation_results/SUMMARY.md << 'EOFMARKER'
+          # Validation Summary
+          
+          **Status:** Incomplete
+          
+          The validation process did not complete successfully. Please check the workflow logs for errors.
+          
+          ## Possible Issues:
+          - No rules were changed
+          - Error in synthetic log generation
+          - Error in rule validation
+          - Error in comparison/classification
+          
+          Please review the GitHub Actions logs for detailed error messages.
+          EOFMARKER
+            echo "Created minimal summary report"
           fi
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      # ============================================================================
-      # Upload all validation artifacts for review
-      # ============================================================================
       - name: Upload validation artifacts
         if: always() && steps.changed-rules.outputs.has_changes == 'true'
         uses: actions/upload-artifact@v4
@@ -345,21 +289,15 @@ EOF
             synthetic_logs/**
           retention-days: 30
 
-      # ============================================================================
-      # Comment on PR with results (for pull requests)
-      # ============================================================================
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && steps.changed-rules.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            try {
-              const summaryPath = 'validation_results/SUMMARY.md';
-              if (!fs.existsSync(summaryPath)) {
-                console.log('Summary file not found, skipping PR comment');
-                return;
-              }
+            const summaryPath = 'validation_results/SUMMARY.md';
+            if (fs.existsSync(summaryPath)) {
               const summary = fs.readFileSync(summaryPath, 'utf8');
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
@@ -367,7 +305,4 @@ EOF
                 repo: context.repo.repo,
                 body: summary
               });
-              console.log('Posted results to PR');
-            } catch (error) {
-              console.error('Failed to post comment:', error);
             }
