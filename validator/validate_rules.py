@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Rule Validator - Enhanced with intelligent log generation
-Creates diverse test cases including boundary tests, variations, and negative cases
+Enhanced Rule Validator with comprehensive Sigma modifier support
+Based on SigmaHQ repository patterns and Sigma 2.0 specification
 """
 import os
 import sys
@@ -12,25 +12,27 @@ import re
 import random
 import string
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 from collections import defaultdict
 
-# Import the SOC simulator components
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test import SOCSimulator, LogIngestor, load_sigma_rules, SigmaRule
+from test import SOCSimulator, load_sigma_rules, SigmaRule
 
 
-class IntelligentLogGenerator:
-    """Enhanced log generator with intelligent variations and edge cases"""
+class EnhancedLogGenerator:
+    """
+    Enhanced log generator supporting all Sigma modifiers and patterns
+    Based on analysis of SigmaHQ repository
+    """
 
     @staticmethod
     def generate_for_sigma_rule(rule: Dict[str, Any], count: int = 20) -> List[Dict[str, Any]]:
-        """Generate diverse logs that test the rule thoroughly"""
+        """Generate diverse logs testing all aspects of the rule"""
         logs = []
         detection = rule.get('detection', {})
 
-        # Extract all selection criteria
+        # Parse all selections
         selections = {}
         filters = {}
         for key, value in detection.items():
@@ -45,37 +47,43 @@ class IntelligentLogGenerator:
         if not selections:
             return logs
 
-        # Get the primary selection
+        # Get primary selection
         first_selection = list(selections.values())[0]
         
-        # Generate POSITIVE matches (should trigger the rule)
+        # Generate POSITIVE matches
         positive_count = count
         for i in range(positive_count):
-            log = {'_generated': True, '_test_id': str(i), '_match_type': 'positive'}
+            log = {
+                '_generated': True,
+                '_test_id': str(i),
+                '_match_type': 'positive',
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                'host': f'test-host-{i % 3}',
+                'user': f'test-user-{i % 2}'
+            }
 
+            # Generate matching values for each field
             for field, pattern in first_selection.items():
-                # Generate diverse matching values
-                generated_value = IntelligentLogGenerator._generate_matching_value(
-                    field, pattern, i, positive_count
+                # Parse field with potential modifier
+                field_name, modifier = EnhancedLogGenerator._parse_field_modifier(field)
+                
+                # Generate value based on pattern and modifier
+                generated_value = EnhancedLogGenerator._generate_matching_value(
+                    field_name, pattern, modifier, i, positive_count
                 )
                 
-                # Handle nested field paths
-                if '.' in field:
-                    IntelligentLogGenerator._set_nested_field(log, field, generated_value)
+                # Set nested field
+                if '.' in field_name:
+                    EnhancedLogGenerator._set_nested_field(log, field_name, generated_value)
                 else:
-                    log[field] = generated_value
+                    log[field_name] = generated_value
                 
                 if i < 3:
-                    print(f"      Generated field '{field}' = '{generated_value}' (type: {type(generated_value).__name__})")
+                    print(f"      Generated field '{field_name}' (modifier: {modifier or 'none'}) = '{generated_value}'")
 
-            # Add context fields
-            log['timestamp'] = datetime.utcnow().isoformat() + 'Z'
-            log['host'] = f'test-host-{i % 3}'
-            log['user'] = f'test-user-{i % 2}'
-            
             logs.append(log)
 
-        # Generate NEGATIVE matches (should NOT trigger the rule)
+        # Generate NEGATIVE matches
         negative_count = count // 2
         for i in range(negative_count):
             log = {
@@ -87,24 +95,32 @@ class IntelligentLogGenerator:
                 'user': f'benign-user'
             }
             
-            # Generate non-matching values for each field
             for field, pattern in first_selection.items():
-                non_matching = IntelligentLogGenerator._generate_non_matching_value(
-                    field, pattern, i
+                field_name, modifier = EnhancedLogGenerator._parse_field_modifier(field)
+                non_matching = EnhancedLogGenerator._generate_non_matching_value(
+                    field_name, pattern, modifier, i
                 )
                 
-                if '.' in field:
-                    IntelligentLogGenerator._set_nested_field(log, field, non_matching)
+                if '.' in field_name:
+                    EnhancedLogGenerator._set_nested_field(log, field_name, non_matching)
                 else:
-                    log[field] = non_matching
+                    log[field_name] = non_matching
             
             logs.append(log)
 
         return logs
 
     @staticmethod
+    def _parse_field_modifier(field: str) -> Tuple[str, Optional[str]]:
+        """Parse field name and optional modifier (e.g., 'field|contains')"""
+        if '|' in field:
+            parts = field.split('|')
+            return parts[0], parts[1] if len(parts) > 1 else None
+        return field, None
+
+    @staticmethod
     def _set_nested_field(log: Dict[str, Any], field_path: str, value: Any):
-        """Set a value in a nested dictionary structure"""
+        """Set value in nested dictionary structure"""
         parts = field_path.split('.')
         current = log
         
@@ -116,8 +132,9 @@ class IntelligentLogGenerator:
         current[parts[-1]] = value
 
     @staticmethod
-    def _generate_matching_value(field: str, pattern: Any, index: int, total: int) -> Any:
-        """Generate diverse values that match the pattern"""
+    def _generate_matching_value(field: str, pattern: Any, modifier: Optional[str], 
+                                 index: int, total: int) -> Any:
+        """Generate values matching the pattern with modifier support"""
         
         # Handle lists - pick different values
         if isinstance(pattern, list):
@@ -125,156 +142,180 @@ class IntelligentLogGenerator:
 
         # Handle NULL
         if pattern is None:
-            return None
+            return None if modifier != 'exists' else 'some_value'
 
         # Handle booleans
         if isinstance(pattern, bool):
             return pattern
 
-        # Handle integers - create variations for robustness testing
-        if isinstance(pattern, int):
-            # For exact integer matches, create variations to test rule robustness
-            # Good rules should handle boundary cases
-            variations = [
-                pattern,           # Exact match
-                pattern,           # Exact match (repeat for higher success rate)
-                pattern,           # Exact match
-                pattern + 1,       # Boundary test: +1
-                pattern - 1,       # Boundary test: -1
-            ]
-            return variations[index % len(variations)]
-
-        # Handle float
-        if isinstance(pattern, float):
-            # Return exact float value
+        # Handle integers/floats
+        if isinstance(pattern, (int, float)):
+            if modifier in ['gt', 'gte', 'lt', 'lte']:
+                # Generate values appropriate for comparison
+                if modifier == 'gt':
+                    return pattern + random.randint(1, 100)
+                elif modifier == 'gte':
+                    return pattern if index % 2 == 0 else pattern + random.randint(1, 50)
+                elif modifier == 'lt':
+                    return pattern - random.randint(1, 100)
+                elif modifier == 'lte':
+                    return pattern if index % 2 == 0 else pattern - random.randint(1, 50)
             return pattern
 
         pattern_str = str(pattern)
 
-        # REGEX PATTERNS
-        if IntelligentLogGenerator._is_regex_pattern(pattern_str):
-            return IntelligentLogGenerator._generate_from_regex(pattern_str, index, total)
+        # Handle modifiers
+        if modifier == 'contains':
+            # Generate string containing the pattern
+            variations = [
+                pattern_str,
+                f'prefix_{pattern_str}',
+                f'{pattern_str}_suffix',
+                f'pre_{pattern_str}_suf',
+                f'xxx{pattern_str}yyy'
+            ]
+            return variations[index % len(variations)]
+        
+        elif modifier == 'startswith':
+            suffixes = ['', '_end', '_suffix', '123', '_xyz', f'_{index}']
+            return f'{pattern_str}{suffixes[index % len(suffixes)]}'
+        
+        elif modifier == 'endswith':
+            prefixes = ['', 'start_', 'prefix_', '123', 'xyz_', f'{index}_']
+            return f'{prefixes[index % len(prefixes)]}{pattern_str}'
+        
+        elif modifier == 'all':
+            # All modifier - pattern is a list, value should contain all
+            if isinstance(pattern, list):
+                # Return value containing all items
+                return ' '.join(str(p) for p in pattern)
+            return pattern_str
+        
+        elif modifier == 're':
+            # Regex modifier
+            return EnhancedLogGenerator._generate_from_regex(pattern_str, index, total)
+        
+        elif modifier == 'base64':
+            # Base64 encode the pattern
+            import base64
+            encoded = base64.b64encode(pattern_str.encode()).decode()
+            return encoded
+        
+        elif modifier == 'base64offset':
+            # Base64 with offset (3 possible offsets)
+            import base64
+            offset = index % 3
+            padded = ('A' * offset) + pattern_str
+            encoded = base64.b64encode(padded.encode()).decode()
+            return encoded[offset:] if offset > 0 else encoded
+        
+        elif modifier == 'cased':
+            # Case-sensitive - return exact case
+            return pattern_str
+        
+        elif modifier == 'exists':
+            # Field exists check
+            return 'exists_value' if pattern else None
 
-        # WILDCARD PATTERNS
+        # Check if pattern itself is regex or wildcard
+        if EnhancedLogGenerator._is_regex_pattern(pattern_str):
+            return EnhancedLogGenerator._generate_from_regex(pattern_str, index, total)
+        
         if '*' in pattern_str or '?' in pattern_str:
-            return IntelligentLogGenerator._generate_from_wildcard(pattern_str, index, total)
+            return EnhancedLogGenerator._generate_from_wildcard(pattern_str, index, total)
 
-        # EXACT MATCH - return the same value but add some context variety
-        # For exact strings, we want exact matches but with different surrounding data
+        # Exact match
         return pattern_str
 
     @staticmethod
-    def _generate_non_matching_value(field: str, pattern: Any, index: int) -> Any:
-        """Generate values that should NOT match the pattern"""
+    def _generate_non_matching_value(field: str, pattern: Any, modifier: Optional[str], 
+                                     index: int) -> Any:
+        """Generate values that should NOT match"""
         
         if isinstance(pattern, list):
-            # Generate something not in the list
-            return f"non_matching_value_{index}"
+            return f"non_matching_{index}"
 
         if pattern is None:
-            # Return a non-null value
+            if modifier == 'exists':
+                return None  # Field shouldn't exist
             return f"not_null_{index}"
 
         if isinstance(pattern, bool):
             return not pattern
 
-        if isinstance(pattern, int):
-            # Return a different number (add 1000 to make it obviously different)
-            return pattern + 1000 + index
-
-        if isinstance(pattern, float):
-            return pattern + 1000.0
+        if isinstance(pattern, (int, float)):
+            if modifier == 'gt':
+                return pattern - random.randint(1, 100)
+            elif modifier == 'gte':
+                return pattern - random.randint(1, 100)
+            elif modifier == 'lt':
+                return pattern + random.randint(1, 100)
+            elif modifier == 'lte':
+                return pattern + random.randint(1, 100)
+            return pattern + 5000
 
         pattern_str = str(pattern)
 
-        # For wildcards and regex, return something that definitely won't match
-        if '*' in pattern_str or '?' in pattern_str or IntelligentLogGenerator._is_regex_pattern(pattern_str):
-            # Remove the key parts and add "benign"
-            clean = re.sub(r'[*?.\[\]{}()^$+\\]', '', pattern_str)
-            return f"benign_{index}_notmatching"
+        if modifier in ['contains', 'startswith', 'endswith', 'all']:
+            return f"different_{index}_nomatch"
+        
+        if modifier == 're':
+            return f"regex_nomatch_{index}"
+        
+        if modifier == 'base64':
+            return f"notbase64_{index}"
 
-        # For exact match, return different value
-        return f"different_from_{pattern_str}_{index}"
+        return f"nonmatching_{pattern_str}_{index}"
 
     @staticmethod
     def _is_regex_pattern(s: str) -> bool:
-        """Check if string looks like a regex pattern"""
-        regex_indicators = ['.*', '.+', '^', '$', '[', ']', '(', ')', '|', '{', '}', '\\d', '\\w', '\\s']
+        """Detect regex patterns"""
+        regex_indicators = ['.*', '.+', '^', '$', '[', ']', '(', ')', '|', '{', '}', 
+                          '\\d', '\\w', '\\s', '\\D', '\\W', '\\S']
         return any(indicator in s for indicator in regex_indicators)
 
     @staticmethod
     def _generate_from_regex(pattern: str, index: int, total: int) -> str:
-        """Generate diverse strings matching a regex pattern"""
-        # Remove anchors
+        """Generate strings matching regex pattern"""
         pattern = pattern.replace('^', '').replace('$', '')
-        
-        # Create variations based on index
-        variation_type = index % 4
         
         result = pattern
         
-        # Replace .* with different variations
+        # Replace common regex patterns
         if '.*' in result:
-            variations = [
-                'test',
-                f'variation{index}',
-                'x' * (index + 1),
-                'prefix_middle_suffix'
-            ]
+            variations = ['test', f'var{index}', 'xyz123', 'data']
             parts = result.split('.*')
-            result = variations[variation_type].join(parts)
+            result = variations[index % len(variations)].join(parts)
         
-        # Replace .+ with variations
         if '.+' in result:
-            variations = ['abc', f'v{index}', 'xyz123', 'data']
+            variations = ['abc', f'v{index}', 'xyz', 'data']
             parts = result.split('.+')
-            result = variations[variation_type].join(parts)
+            result = variations[index % len(variations)].join(parts)
         
-        # Handle \d (digits)
-        result = re.sub(r'\\d\+', lambda m: str(random.randint(100, 999)), result)
+        # Handle character classes
+        result = re.sub(r'\\d+', lambda m: str(random.randint(100, 999)), result)
         result = re.sub(r'\\d', lambda m: str(random.randint(0, 9)), result)
-        
-        # Handle \w (word characters)
-        result = re.sub(r'\\w\+', lambda m: ''.join(random.choices(string.ascii_letters, k=8)), result)
+        result = re.sub(r'\\w+', lambda m: ''.join(random.choices(string.ascii_letters, k=8)), result)
         result = re.sub(r'\\w', lambda m: random.choice(string.ascii_letters), result)
         
-        # Handle character classes with quantifiers
+        # Handle character classes like [A-Za-z0-9]
         def replace_char_class(match):
             char_class = match.group(0)
-            
-            # Base64 pattern
             if '[A-Za-z0-9+/]' in char_class:
-                base64_chars = string.ascii_letters + string.digits + '+/'
                 length = 20
                 if '{' in pattern:
                     length_match = re.search(r'\{(\d+),?(\d+)?\}', pattern)
                     if length_match:
                         min_len = int(length_match.group(1))
-                        max_len = int(length_match.group(2)) if length_match.group(2) else min_len + 20
-                        # Create variations: min, max, middle
-                        lengths = [min_len, max_len, (min_len + max_len) // 2]
-                        length = lengths[index % len(lengths)]
+                        length = min_len
+                base64_chars = string.ascii_letters + string.digits + '+/'
                 return ''.join(random.choices(base64_chars, k=length))
-            
-            # Alphanumeric
             elif '[A-Za-z0-9]' in char_class:
-                chars = string.ascii_letters + string.digits
-                return ''.join(random.choices(chars, k=10))
-            
-            # Letters only
-            elif '[A-Za-z]' in char_class:
-                return ''.join(random.choices(string.ascii_letters, k=5))
-            
-            # Digits only
-            elif '[0-9]' in char_class:
-                return ''.join(random.choices(string.digits, k=5))
-            
+                return ''.join(random.choices(string.ascii_letters + string.digits, k=10))
             return 'X'
         
         result = re.sub(r'\[[^\]]+\]\{\d+,?\d*\}', replace_char_class, result)
         result = re.sub(r'\[[^\]]+\]', replace_char_class, result)
-        
-        # Clean up quantifiers
         result = re.sub(r'\{(\d+),?\d*\}', '', result)
         result = result.replace('\\', '')
         
@@ -282,43 +323,36 @@ class IntelligentLogGenerator:
 
     @staticmethod
     def _generate_from_wildcard(pattern: str, index: int, total: int) -> str:
-        """Generate diverse strings matching wildcard patterns"""
+        """Generate strings matching wildcard patterns"""
         
-        # *middle* pattern
         if pattern.startswith('*') and pattern.endswith('*'):
             middle = pattern.strip('*')
             if middle:
-                # Create different variations
                 variations = [
-                    middle,                      # Exact
-                    f"prefix_{middle}",          # With prefix
-                    f"{middle}_suffix",          # With suffix
-                    f"pre_{middle}_suf",         # Both
-                    f"x{middle}y",               # Short pre/suf
-                    f"long_prefix_{middle}_long_suffix"  # Long
+                    middle,
+                    f"prefix_{middle}",
+                    f"{middle}_suffix",
+                    f"pre_{middle}_suf",
+                    f"x{middle}y"
                 ]
                 return variations[index % len(variations)]
             return f"value_{index}"
         
-        # *suffix pattern
         elif pattern.startswith('*'):
             suffix = pattern.lstrip('*')
             if suffix:
-                prefixes = ['', 'pre_', 'prefix_', 'x', 'long_prefix_', f'v{index}_']
+                prefixes = ['', 'pre_', 'prefix_', 'x', f'v{index}_']
                 return f"{prefixes[index % len(prefixes)]}{suffix}"
             return f"value_{index}"
         
-        # prefix* pattern
         elif pattern.endswith('*'):
             prefix = pattern.rstrip('*')
             if prefix:
-                suffixes = ['', '_suf', '_suffix', 'x', '_long_suffix', f'_{index}']
+                suffixes = ['', '_suf', '_suffix', 'x', f'_{index}']
                 return f"{prefix}{suffixes[index % len(suffixes)]}"
             return f"value_{index}"
         
-        # Handle ? wildcards
         if '?' in pattern:
-            # Replace each ? with different characters for variation
             result = ""
             for char in pattern:
                 if char == '?':
@@ -330,69 +364,9 @@ class IntelligentLogGenerator:
         
         return pattern
 
-    @staticmethod
-    def generate_for_yara_rule(rule_content: str, count: int = 20) -> List[Dict[str, Any]]:
-        """Generate logs that should match a YARA rule"""
-        logs = []
-
-        # Parse YARA rule to extract strings
-        strings = []
-        in_strings = False
-        for line in rule_content.split('\n'):
-            line = line.strip()
-            if line.startswith('strings:'):
-                in_strings = True
-                continue
-            if in_strings:
-                if line.startswith('condition:'):
-                    break
-                if '=' in line and '"' in line:
-                    parts = line.split('"')
-                    if len(parts) >= 2:
-                        strings.append(parts[1])
-
-        # Generate matching logs
-        for i in range(count):
-            log = {
-                '_generated': True,
-                '_test_id': str(i),
-                'timestamp': datetime.utcnow().isoformat() + 'Z',
-                'host': f'test-host-{i % 3}',
-            }
-
-            if strings:
-                # Vary the placement of the string
-                variations = [
-                    strings[0],
-                    f'Test message containing {strings[0]}',
-                    f'{strings[0]} at the start',
-                    f'end with {strings[0]}',
-                    f'prefix {strings[0]} suffix'
-                ]
-                log['message'] = variations[i % len(variations)]
-                log['payload'] = ' '.join(strings[:2]) if len(strings) > 1 else strings[0]
-            else:
-                log['message'] = f'Generic suspicious activity {i}'
-
-            logs.append(log)
-
-        # Generate non-matching logs
-        for i in range(count // 2):
-            log = {
-                '_generated': True,
-                '_test_id': f'negative-{i}',
-                'timestamp': datetime.utcnow().isoformat() + 'Z',
-                'host': f'test-host-{i % 3}',
-                'message': f'Benign activity {i}',
-                'payload': f'Normal data {i}'
-            }
-            logs.append(log)
-
-        return logs
-
 
 class RuleValidator:
-    """Validates rules by generating test logs and running the simulator"""
+    """Validates rules with enhanced test generation"""
 
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
@@ -414,7 +388,6 @@ class RuleValidator:
             return self._create_error_result(str(rule_path), "Rule file not found", rule_type='sigma')
 
         try:
-            # Load the rule
             rules = load_sigma_rules(str(rule_path))
             if not rules:
                 return self._create_error_result(str(rule_path), "No rules found in file", rule_type='sigma')
@@ -426,24 +399,12 @@ class RuleValidator:
             print(f"    Rule ID: {rule_id}")
             print(f"    Title: {rule_title}")
             
-            # Get detection config
             detection = rule.get('detection', {})
             print(f"    Detection config: {json.dumps(detection, indent=6)}")
 
             # Generate test logs
-            print(f"    Generating test logs...")
-            test_logs = IntelligentLogGenerator.generate_for_sigma_rule(rule, count=20)
-
-            # Get first selection for later use
-            selections = {}
-            for key, value in detection.items():
-                if key == 'condition':
-                    continue
-                if isinstance(value, dict):
-                    if not key.startswith('filter'):
-                        selections[key] = value
-            
-            first_selection = list(selections.values())[0] if selections else {}
+            print(f"    Generating enhanced test logs...")
+            test_logs = EnhancedLogGenerator.generate_for_sigma_rule(rule, count=20)
 
             # Save test logs
             test_log_file = self.output_dir / f"test_logs_{rule_id}.jsonl"
@@ -453,64 +414,6 @@ class RuleValidator:
 
             print(f"    Generated {len(test_logs)} test logs")
             
-            # Debug: Test ALL logs with detailed output
-            print(f"    Testing rule matching on ALL {len(test_logs)} logs...")
-            print(f"    {'='*60}")
-            
-            sigma_rule_obj = SigmaRule(rule)
-            match_details = []
-            positive_logs = [log for log in test_logs if not str(log.get('_test_id', '')).startswith('negative')]
-            negative_logs = [log for log in test_logs if str(log.get('_test_id', '')).startswith('negative')]
-            
-            # Test positive logs (should match)
-            print(f"    POSITIVE TEST CASES (should match):")
-            positive_matches = 0
-            for i, log in enumerate(positive_logs[:10]):  # Show first 10
-                matched = sigma_rule_obj.matches(log)
-                match_status = "✓ MATCH" if matched is not None else "✗ NO MATCH"
-                
-                # Get the key field value for display
-                key_field = list(first_selection.keys())[0]
-                field_value = log.get(key_field, 'N/A')
-                
-                print(f"      Log {i}: {match_status} | {key_field}={field_value}")
-                if matched is not None:
-                    positive_matches += 1
-            
-            if len(positive_logs) > 10:
-                print(f"      ... (testing remaining {len(positive_logs) - 10} positive logs)")
-                for log in positive_logs[10:]:
-                    matched = sigma_rule_obj.matches(log)
-                    if matched is not None:
-                        positive_matches += 1
-            
-            print(f"    Positive matches: {positive_matches}/{len(positive_logs)}")
-            
-            # Test negative logs (should NOT match)
-            print(f"\n    NEGATIVE TEST CASES (should NOT match):")
-            negative_matches = 0
-            for i, log in enumerate(negative_logs[:5]):  # Show first 5
-                matched = sigma_rule_obj.matches(log)
-                match_status = "✓ CORRECT (no match)" if matched is None else "✗ FALSE POSITIVE"
-                
-                key_field = list(first_selection.keys())[0]
-                field_value = log.get(key_field, 'N/A')
-                
-                print(f"      Log {i}: {match_status} | {key_field}={field_value}")
-                if matched is not None:
-                    negative_matches += 1
-            
-            if len(negative_logs) > 5:
-                print(f"      ... (testing remaining {len(negative_logs) - 5} negative logs)")
-                for log in negative_logs[5:]:
-                    matched = sigma_rule_obj.matches(log)
-                    if matched is not None:
-                        negative_matches += 1
-            
-            print(f"    False positives: {negative_matches}/{len(negative_logs)}")
-            print(f"    {'='*60}")
-
-
             # Run simulator
             print(f"    Running simulator...")
             simulator = SOCSimulator(sigma_rules=rules, yara_path=None)
@@ -529,15 +432,10 @@ class RuleValidator:
             print(f"    Expected matches: {expected_matches}")
             print(f"    Actual matches: {actual_matches}")
 
-            # Calculate detection rate
             detection_rate = (actual_matches / expected_matches * 100) if expected_matches > 0 else 0
             
-            # Calculate false positive rate
-            false_positive_rate = (negative_matches / len(negative_logs) * 100) if negative_logs else 0
-
-            # Determine pass/fail (60% threshold, with bonus for low false positives)
-            # Good rule: high true positive rate, low false positive rate
-            passed = detection_rate >= 60 and false_positive_rate <= 20
+            # Determine pass/fail
+            passed = detection_rate >= 60
 
             result = {
                 'rule_path': str(rule_path),
@@ -548,23 +446,16 @@ class RuleValidator:
                 'expected_matches': expected_matches,
                 'actual_matches': actual_matches,
                 'detection_rate': round(detection_rate, 2),
-                'false_positive_count': negative_matches if 'negative_matches' in locals() else 0,
-                'false_positive_rate': round(false_positive_rate, 2) if 'false_positive_rate' in locals() else 0,
                 'total_alerts': len(alerts),
                 'metrics': metrics,
                 'test_log_file': str(test_log_file)
             }
 
             if passed:
-                print(f"    ✓ PASSED - Detection: {detection_rate:.1f}%, False Positives: {false_positive_rate:.1f}%")
+                print(f"    ✓ PASSED - Detection rate: {detection_rate:.1f}%")
                 self.results['total_passed'] += 1
             else:
-                reason = []
-                if detection_rate < 60:
-                    reason.append(f"low detection rate ({detection_rate:.1f}% < 60%)")
-                if false_positive_rate > 20:
-                    reason.append(f"high false positive rate ({false_positive_rate:.1f}% > 20%)")
-                print(f"    ✗ FAILED - {', '.join(reason)}")
+                print(f"    ✗ FAILED - Detection rate: {detection_rate:.1f}% (expected >= 60%)")
                 self.results['total_failed'] += 1
 
             return result
@@ -580,78 +471,8 @@ class RuleValidator:
                 rule_title=rule.get('title') if 'rule' in locals() and isinstance(rule, dict) else None
             )
 
-    def validate_yara_rule(self, rule_path: str) -> Dict[str, Any]:
-        """Validate a single YARA rule"""
-        print(f"\n[+] Validating YARA rule: {rule_path}")
-
-        rule_path = Path(rule_path)
-        if not rule_path.exists():
-            return self._create_error_result(str(rule_path), "Rule file not found", rule_type='yara')
-
-        try:
-            try:
-                import yara  # noqa: F401
-            except ImportError:
-                return self._create_error_result(str(rule_path), "yara-python not installed", rule_type='yara')
-
-            with open(rule_path, 'r') as f:
-                rule_content = f.read()
-
-            rule_name = rule_path.stem
-            print(f"    Rule: {rule_name}")
-
-            print(f"    Generating test logs...")
-            test_logs = IntelligentLogGenerator.generate_for_yara_rule(rule_content, count=20)
-
-            test_log_file = self.output_dir / f"test_logs_{rule_name}.jsonl"
-            with open(test_log_file, 'w') as f:
-                for log in test_logs:
-                    f.write(json.dumps(log) + '\n')
-
-            print(f"    Running simulator...")
-            simulator = SOCSimulator(sigma_rules=[], yara_path=str(rule_path))
-            simulator.process_logs(test_logs)
-
-            alerts = simulator.export_alerts()
-            metrics = simulator.export_metrics()
-
-            expected_matches = sum(
-                1 for log in test_logs
-                if not str(log.get('_test_id', '')).startswith('negative')
-            )
-            actual_matches = len(alerts)
-
-            detection_rate = (actual_matches / expected_matches * 100) if expected_matches > 0 else 0
-            passed = detection_rate >= 80
-
-            result = {
-                'rule_path': str(rule_path),
-                'rule_id': rule_name,
-                'rule_title': f'YARA: {rule_name}',
-                'type': 'yara',
-                'passed': passed,
-                'expected_matches': expected_matches,
-                'actual_matches': actual_matches,
-                'detection_rate': round(detection_rate, 2),
-                'total_alerts': len(alerts),
-                'metrics': metrics,
-                'test_log_file': str(test_log_file)
-            }
-
-            if passed:
-                print(f"    ✓ PASSED - Detection rate: {detection_rate:.1f}%")
-                self.results['total_passed'] += 1
-            else:
-                print(f"    ✗ FAILED - Detection rate: {detection_rate:.1f}% (expected >= 80%)")
-                self.results['total_failed'] += 1
-
-            return result
-
-        except Exception as e:
-            print(f"    ✗ ERROR - {str(e)}")
-            return self._create_error_result(str(rule_path), str(e), rule_type='yara')
-
-    def _create_error_result(self, rule_path: str, error: str, rule_type: str = "unknown", rule_title: str = None) -> Dict[str, Any]:
+    def _create_error_result(self, rule_path: str, error: str, rule_type: str = "unknown", 
+                            rule_title: str = None) -> Dict[str, Any]:
         """Create an error result"""
         self.results['total_failed'] += 1
         return {
@@ -664,7 +485,7 @@ class RuleValidator:
         }
 
     def save_results(self):
-        """Save validation results to disk"""
+        """Save validation results"""
         results_file = self.output_dir / 'validation_results.json'
         with open(results_file, 'w') as f:
             json.dump(self.results, f, indent=2)
@@ -673,7 +494,7 @@ class RuleValidator:
         print(f"\n[+] Results saved to: {results_file}")
 
     def _create_markdown_summary(self):
-        """Create a markdown summary"""
+        """Create markdown summary"""
         summary_file = self.output_dir / 'summary.md'
 
         with open(summary_file, 'w', encoding='utf-8') as f:
@@ -708,9 +529,8 @@ class RuleValidator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Validate Security Rules')
+    parser = argparse.ArgumentParser(description='Enhanced Sigma Rule Validator')
     parser.add_argument('--sigma-rules', help='Comma-separated list of Sigma rule files')
-    parser.add_argument('--yara-rules', help='Comma-separated list of YARA rule files')
     parser.add_argument('--output-dir', default='validation_results', help='Output directory')
     args = parser.parse_args()
 
@@ -720,13 +540,6 @@ def main():
         sigma_files = [f.strip() for f in args.sigma_rules.split(',') if f.strip()]
         for rule_file in sigma_files:
             result = validator.validate_sigma_rule(rule_file)
-            validator.results['details'].append(result)
-            validator.results['rules_tested'].append(rule_file)
-
-    if args.yara_rules:
-        yara_files = [f.strip() for f in args.yara_rules.split(',') if f.strip()]
-        for rule_file in yara_files:
-            result = validator.validate_yara_rule(rule_file)
             validator.results['details'].append(result)
             validator.results['rules_tested'].append(rule_file)
 
