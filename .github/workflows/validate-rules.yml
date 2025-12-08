@@ -254,12 +254,26 @@ jobs:
           echo "STEP 3: Comparing baseline vs current"
           echo "============================================================"
           
+          # Show detection files for debugging
+          echo "📊 Checking detection files..."
+          echo "Baseline detections:"
+          ls -lh validation_results/baseline/detections.json || echo "  Not found"
+          echo "Current detections:"
+          ls -lh validation_results/current/detections.json || echo "  Not found"
+          
+          # Show sample detections
+          if [ -f "validation_results/current/detections.json" ]; then
+            echo "📄 Sample current detections (first 3):"
+            head -50 validation_results/current/detections.json
+          fi
+          
           python validator/compare_and_classify.py \
             --baseline-results validation_results/baseline \
             --current-results validation_results/current \
             --changed-sigma-rules "${{ steps.changed-rules.outputs.sigma_rules }}" \
             --changed-yara-rules "${{ steps.changed-rules.outputs.yara_rules }}" \
-            --output-file validation_results/classification_report.json
+            --output-file validation_results/classification_report.json \
+            --debug
           
           echo "✅ Classification complete"
         env:
