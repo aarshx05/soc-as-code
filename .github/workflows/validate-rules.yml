@@ -27,7 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install pyyaml
 
       - name: Detect changed rules
         id: changed-rules
@@ -234,8 +234,6 @@ jobs:
           python validator/validate_rules.py \
             --all-sigma-rules rules/sigma \
             --all-yara-rules rules/yara \
-            --changed-sigma-rules "${{ steps.changed-rules.outputs.sigma_rules }}" \
-            --changed-yara-rules "${{ steps.changed-rules.outputs.yara_rules }}" \
             --synthetic-logs-dir synthetic_logs/combined \
             --output-dir validation_results/current \
             --mode current
@@ -304,11 +302,33 @@ jobs:
           echo "Generating summary report"
           echo "============================================================"
           
-          python validator/generate_report.py \
-            --classification-report validation_results/classification_report.json \
-            --output-file validation_results/SUMMARY.md
-          
-          echo "✅ Report generated"
+          # Check if classification report exists before generating summary
+          if [ -f "validation_results/classification_report.json" ]; then
+            python validator/generate_report.py \
+              --classification-report validation_results/classification_report.json \
+              --output-file validation_results/SUMMARY.md
+            
+            echo "✅ Report generated"
+          else
+            echo "⚠️  Classification report not found, creating minimal summary"
+            mkdir -p validation_results
+            cat > validation_results/SUMMARY.md << 'EOF'
+# Validation Summary
+
+**Status:** Incomplete
+
+The validation process did not complete successfully. Please check the workflow logs for errors.
+
+## Possible Issues:
+- No rules were changed
+- Error in synthetic log generation
+- Error in rule validation
+- Error in comparison/classification
+
+Please review the GitHub Actions logs for detailed error messages.
+EOF
+            echo "⚠️ Created minimal summary report"
+          fi
         env:
           PYTHONPATH: ${{ github.workspace }}
 
@@ -336,7 +356,14 @@ jobs:
             const fs = require('fs');
             
             try {
-              const summary = fs.readFileSync('validation_results/SUMMARY.md', 'utf8');
+              const summaryPath = 'validation_results/SUMMARY.md';
+              
+              if (!fs.existsSync(summaryPath)) {
+                console.log('⚠️ Summary file not found, skipping PR comment');
+                return;
+              }
+              
+              const summary = fs.readFileSync(summaryPath, 'utf8');
               
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
@@ -348,4 +375,5 @@ jobs:
               console.log('✅ Posted results to PR');
             } catch (error) {
               console.error('❌ Failed to post comment:', error);
+              // Don't fail the workflow if PR comment fails
             }
