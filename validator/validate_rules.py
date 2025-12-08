@@ -431,6 +431,17 @@ class RuleValidator:
             print(f"    Generating test logs...")
             test_logs = IntelligentLogGenerator.generate_for_sigma_rule(rule, count=20)
 
+            # Get first selection for later use
+            selections = {}
+            for key, value in detection.items():
+                if key == 'condition':
+                    continue
+                if isinstance(value, dict):
+                    if not key.startswith('filter'):
+                        selections[key] = value
+            
+            first_selection = list(selections.values())[0] if selections else {}
+
             # Save test logs
             test_log_file = self.output_dir / f"test_logs_{rule_id}.jsonl"
             with open(test_log_file, 'w') as f:
