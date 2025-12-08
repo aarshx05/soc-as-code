@@ -52,27 +52,111 @@ jobs:
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Generate test logs and validate rules
+      - name: Generate synthetic logs from all existing rules
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
-          python validator/validate_rules.py \
-            --sigma-rules "${{ steps.changed-rules.outputs.sigma_rules }}" \
-            --yara-rules "${{ steps.changed-rules.outputs.yara_rules }}" \
-            --output-dir validation_results
+          echo "Generating synthetic logs from all existing Sigma rules..."
+          python validator/generate_logs.py \
+            --rules-dir rules/sigma \
+            --output-dir synthetic_logs \
+            --log-count 100
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      - name: Check validation results
+      - name: Validate OLD rules (baseline)
         if: steps.changed-rules.outputs.has_changes == 'true'
         run: |
-          python validator/check_results.py --results-dir validation_results
+          echo "Step 1: Validating OLD rules against synthetic logs (baseline)..."
+          
+          # Checkout previous commit to get old rules
+          git stash
+          git checkout HEAD~1
+          
+          # Run validation with old rules only
+          python validator/validate_rules.py \
+            --all-sigma-rules rules/sigma \
+            --all-yara-rules rules/yara \
+            --synthetic-logs-dir synthetic_logs \
+            --output-dir validation_results/baseline \
+            --mode baseline
+          
+          # Return to current commit
+          git checkout -
+          git stash pop || true
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Validate NEW rules (with changes)
+        if: steps.changed-rules.outputs.has_changes == 'true'
+        run: |
+          echo "Step 2: Validating NEW rules (old + new) against synthetic logs..."
+          
+          # Run validation with all current rules (including new ones)
+          python validator/validate_rules.py \
+            --all-sigma-rules rules/sigma \
+            --all-yara-rules rules/yara \
+            --changed-sigma-rules "${{ steps.changed-rules.outputs.sigma_rules }}" \
+            --changed-yara-rules "${{ steps.changed-rules.outputs.yara_rules }}" \
+            --synthetic-logs-dir synthetic_logs \
+            --output-dir validation_results/current \
+            --mode current
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Compare and classify new rules
+        if: steps.changed-rules.outputs.has_changes == 'true'
+        run: |
+          echo "Step 3: Comparing baseline vs current and classifying new rules..."
+          
+          python validator/compare_and_classify.py \
+            --baseline-results validation_results/baseline \
+            --current-results validation_results/current \
+            --changed-sigma-rules "${{ steps.changed-rules.outputs.sigma_rules }}" \
+            --changed-yara-rules "${{ steps.changed-rules.outputs.yara_rules }}" \
+            --output-file validation_results/classification_report.json
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Check validation results and rule quality
+        if: steps.changed-rules.outputs.has_changes == 'true'
+        run: |
+          echo "Step 4: Checking final validation results..."
+          
+          python validator/check_results.py \
+            --results-dir validation_results \
+            --classification-report validation_results/classification_report.json \
+            --fail-on-bad-rules true
+
+      - name: Generate summary report
+        if: always() && steps.changed-rules.outputs.has_changes == 'true'
+        run: |
+          echo "Generating human-readable summary report..."
+          
+          python validator/generate_report.py \
+            --classification-report validation_results/classification_report.json \
+            --output-file validation_results/SUMMARY.md
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
       - name: Upload validation artifacts
         if: always() && steps.changed-rules.outputs.has_changes == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: validation-results
-          path: validation_results/**    # ensure v4 picks up files inside the dir
+          path: validation_results/**
           retention-days: 30
 
-    
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && steps.changed-rules.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('validation_results/SUMMARY.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
