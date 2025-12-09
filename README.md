@@ -58,16 +58,21 @@ soc-as-code/
 
 ---
 
-## Dependencies
+Dependencies
 
 Install all required packages using:
 
-```bash
 pip install -r requirements.txt
-```
+
+Updated dependencies:
+
+pyyaml>=6.0
+yara-python>=4.3.1
+flask>=2.3.0
+reportlab>=4.0.0
+requests>=2.31.0
 
 Libraries include:
-
 * **pyyaml** — Rule parsing
 * **regex** — Pattern interpretation
 * **json** — Log data processing
