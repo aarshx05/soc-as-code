@@ -214,6 +214,7 @@ python validator/validate_rules.py --rules rules/sigma --synthetic synthetic_log
 ```
 
 5. **Continuous Integration (GitHub Actions)**
+   
 The project requires GitHub Actions to run the validation pipeline on every push / pull request. The included workflow (.github/workflows/validate-rules.yml) performs the following stages:
 
 * Checkout repository and set up Python
