@@ -65,13 +65,13 @@ Install all required packages using:
 pip install -r requirements.txt
 
 Updated dependencies:
-
+```bash
 pyyaml>=6.0
 yara-python>=4.3.1
 flask>=2.3.0
 reportlab>=4.0.0
 requests>=2.31.0
-
+```
 Libraries include:
 * **pyyaml** — Rule parsing
 * **regex** — Pattern interpretation
