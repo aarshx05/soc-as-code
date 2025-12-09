@@ -213,8 +213,34 @@ pip install -r requirements.txt
 python validator/validate_rules.py --rules rules/sigma --synthetic synthetic_logs/ --mode current
 ```
 
-5. **(Optional) Enable GitHub Actions**
-   Simply push to GitHub — the included workflow will auto-run.
+5. **Continuous Integration (GitHub Actions)**
+The project requires GitHub Actions to run the validation pipeline on every push / pull request. The included workflow (.github/workflows/validate-rules.yml) performs the following stages:
+
+* Checkout repository and set up Python
+* Install dependencies (pip install -r requirements.txt)
+* Generate synthetic logs (unless a SKIP_GENERATE flag is set)
+* Run the rule validator against rules/
+* Run comparison & classification when a baseline is available
+* Upload classification_report.json, validation_results.json, and synthetic_logs as workflow artifacts
+
+Required repository secrets / environment variables:
+
+* BASELINE_ARTIFACT_URL (optional) — URL or path to baseline results if using external baseline storage
+* FAIL_ON_BAD_RULES (boolean) — whether PRs should fail when BAD rules are detected
+* Any platform-integrations secrets (if you add real-log ingestion)
+
+Behavior:
+
+* A PR introducing BAD rules will fail the check and return actionable reports as artifacts.
+* CONCERNING rules will present warnings but may not fail depending on FAIL_ON_BAD_RULES.
+* Artifacts contain both machine-readable (.json) and human-readable (.md) reports for triage.
+
+How to enable:
+
+* Push the repo to GitHub (the workflow file is already included).
+* Add any required repository secrets in Settings → Secrets.
+* Open a PR — the workflow will run automatically and attach artifacts to the run.
+
 
 ---
 
