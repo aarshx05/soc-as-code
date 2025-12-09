@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
-FIXED: Better rule ID extraction and classification logic
-Key fixes:
-1. More robust rule ID matching
-2. Better scoring thresholds
-3. Debug output to see what's happening
+ACTUAL FIX: Extract rule IDs from YAML files, not filenames
+The issue: Detection JSON has rule_id from YAML (e.g., "SIG-001234")
+           But we were matching against filename (e.g., "reg")
 """
 
 import argparse
 import json
+import yaml
 from pathlib import Path
 from typing import Dict, List, Set
 from collections import defaultdict
 
 
-class ImprovedClassifier:
+class WorkingClassifier:
     """
-    Improved classifier with better rule ID matching
+    Classifier that correctly matches rule IDs from YAML files
     """
     
-    def __init__(self, baseline_dir: Path, current_dir: Path):
+    def __init__(self, baseline_dir: Path, current_dir: Path, rules_dir: Path):
         self.baseline_dir = baseline_dir
         self.current_dir = current_dir
+        self.rules_dir = rules_dir
         
         # Load detections
         self.baseline_detections = self._load_detections(baseline_dir)
@@ -57,7 +57,6 @@ class ImprovedClassifier:
             with open(detections_file, 'r') as f:
                 data = json.load(f)
                 print(f"\n   Loaded {len(data)} detections from {detections_file}")
-                # DEBUG: Show first detection structure
                 if data:
                     print(f"   Sample detection keys: {list(data[0].keys())}")
                 return data
@@ -82,106 +81,103 @@ class ImprovedClassifier:
         return dict(rule_map)
     
     def _extract_rule_id(self, detection: Dict) -> str:
-        """
-        Extract rule identifier - IMPROVED VERSION
-        Tries multiple strategies to find the rule ID
-        """
-        # Strategy 1: Direct fields
-        for key in ['rule_id', 'rule_name', 'rule', 'name', 'id', 'title']:
+        """Extract rule identifier from detection JSON"""
+        # Strategy 1: Direct rule_id field (most common)
+        if 'rule_id' in detection and detection['rule_id']:
+            return str(detection['rule_id']).strip()
+        
+        # Strategy 2: Check raw._source_rule_id
+        if 'raw' in detection and isinstance(detection['raw'], dict):
+            if '_source_rule_id' in detection['raw']:
+                return str(detection['raw']['_source_rule_id']).strip()
+        
+        # Strategy 3: rule_title as fallback
+        if 'rule_title' in detection and detection['rule_title']:
+            return str(detection['rule_title']).strip()
+        
+        # Strategy 4: Check other common fields
+        for key in ['rule_name', 'rule', 'id', 'signature_id']:
             if key in detection and detection[key]:
-                value = str(detection[key]).strip()
-                if value:
-                    # Normalize: remove .yml/.yaml extensions, extract basename
-                    value = value.replace('.yml', '').replace('.yaml', '')
-                    if '/' in value:
-                        value = Path(value).stem
-                    return value
-        
-        # Strategy 2: Nested in 'rule' object
-        if 'rule' in detection and isinstance(detection['rule'], dict):
-            for key in ['id', 'name', 'title']:
-                if key in detection['rule']:
-                    value = str(detection['rule'][key]).strip()
-                    if value:
-                        return value.replace('.yml', '').replace('.yaml', '')
-        
-        # Strategy 3: Raw/metadata fields
-        for parent_key in ['raw', '_source', 'metadata', 'event']:
-            if parent_key in detection and isinstance(detection[parent_key], dict):
-                parent = detection[parent_key]
-                for key in ['rule_id', 'rule_name', 'rule', 'signature_id', 'signature']:
-                    if key in parent and parent[key]:
-                        value = str(parent[key]).strip()
-                        if value:
-                            return value.replace('.yml', '').replace('.yaml', '')
-        
-        # Strategy 4: Look for any field containing 'rule' in the key
-        for key in detection.keys():
-            if 'rule' in key.lower() and detection[key]:
-                value = str(detection[key]).strip()
-                if value and len(value) > 3:  # Avoid empty/short values
-                    return value.replace('.yml', '').replace('.yaml', '')
+                return str(detection[key]).strip()
         
         return 'unknown'
     
-    def _normalize_rule_name(self, rule_path: str) -> Set[str]:
+    def _extract_rule_id_from_yaml(self, rule_path: str) -> str:
         """
-        Generate multiple possible rule name variations
-        Returns a set of possible matches
+        Extract the actual rule ID from the YAML file
+        This is THE KEY FIX - we need the ID from inside the YAML, not the filename
         """
-        path = Path(rule_path)
-        variants = set()
-        
-        # Base name without extension
-        base = path.stem
-        variants.add(base)
-        
-        # Full filename
-        variants.add(path.name)
-        variants.add(path.name.replace('.yml', '').replace('.yaml', ''))
-        
-        # Different case variations
-        variants.add(base.lower())
-        variants.add(base.upper())
-        
-        # With underscores vs hyphens
-        variants.add(base.replace('_', '-'))
-        variants.add(base.replace('-', '_'))
-        
-        return variants
+        try:
+            with open(rule_path, 'r') as f:
+                rule_data = yaml.safe_load(f)
+                
+                if not rule_data:
+                    print(f"   ⚠️  Empty YAML file")
+                    return None
+                
+                # Try to find the ID field (common in Sigma rules)
+                if 'id' in rule_data:
+                    rule_id = str(rule_data['id']).strip()
+                    print(f"   Found ID in YAML: {rule_id}")
+                    return rule_id
+                
+                # Fallback to title
+                if 'title' in rule_data:
+                    rule_title = str(rule_data['title']).strip()
+                    print(f"   Using title as ID: {rule_title}")
+                    return rule_title
+                
+                # Last resort: filename
+                rule_name = Path(rule_path).stem
+                print(f"   ⚠️  No ID/title in YAML, using filename: {rule_name}")
+                return rule_name
+                
+        except Exception as e:
+            print(f"   ❌ Error reading YAML: {e}")
+            return None
     
     def classify_new_rule(self, rule_path: str) -> Dict:
         """
         Classify a new rule based on its actual contribution
-        IMPROVED: Better matching logic
+        FIXED: Now extracts rule ID from YAML content
         """
         print(f"\n{'='*70}")
         print(f"🔍 ANALYZING: {rule_path}")
         print(f"{'='*70}")
         
-        # Generate possible rule name variants
-        possible_names = self._normalize_rule_name(rule_path)
-        print(f"Looking for matches: {possible_names}")
+        # Extract the actual rule ID from the YAML file
+        rule_id_from_yaml = self._extract_rule_id_from_yaml(rule_path)
         
-        # Find matches in baseline and current
-        baseline_matches = [name for name in possible_names if name in self.baseline_rules]
-        current_matches = [name for name in possible_names if name in self.current_rules]
-        
-        print(f"Baseline matches: {baseline_matches}")
-        print(f"Current matches: {current_matches}")
-        
-        # Check if rule exists in baseline (ERROR case)
-        if baseline_matches:
-            matched_name = baseline_matches[0]
-            baseline_count = len(self.baseline_rules[matched_name])
-            current_count = len(self.current_rules.get(matched_name, []))
-            
+        if not rule_id_from_yaml:
             return {
                 'rule_name': Path(rule_path).stem,
                 'rule_path': rule_path,
                 'classification': 'ERROR',
                 'score': 0,
-                'reasoning': f'Rule "{matched_name}" exists in baseline ({baseline_count} alerts). This is not a new rule!',
+                'reasoning': 'Could not extract rule ID from YAML file',
+                'triggered': False,
+                'detection_count': 0,
+                'metrics': {}
+            }
+        
+        # Check if rule exists in baseline
+        in_baseline = rule_id_from_yaml in self.baseline_rules
+        in_current = rule_id_from_yaml in self.current_rules
+        
+        print(f"   In baseline: {in_baseline}")
+        print(f"   In current: {in_current}")
+        
+        if in_baseline:
+            baseline_count = len(self.baseline_rules[rule_id_from_yaml])
+            current_count = len(self.current_rules.get(rule_id_from_yaml, []))
+            
+            return {
+                'rule_name': Path(rule_path).stem,
+                'rule_path': rule_path,
+                'rule_id_from_yaml': rule_id_from_yaml,
+                'classification': 'ERROR',
+                'score': 0,
+                'reasoning': f'Rule "{rule_id_from_yaml}" exists in baseline ({baseline_count} alerts). Not a new rule!',
                 'triggered': True,
                 'detection_count': current_count,
                 'metrics': {
@@ -191,18 +187,13 @@ class ImprovedClassifier:
                 }
             }
         
-        # Count detections from this rule in current
-        rule_detection_count = 0
-        matched_name = None
+        # Count detections from this rule
+        rule_detection_count = len(self.current_rules.get(rule_id_from_yaml, []))
         
-        if current_matches:
-            matched_name = current_matches[0]
-            rule_detection_count = len(self.current_rules[matched_name])
-        
-        print(f"✓ Matched as: {matched_name or 'NOT FOUND'}")
+        print(f"✓ Rule ID from YAML: {rule_id_from_yaml}")
         print(f"✓ Detection count: {rule_detection_count}")
         
-        # IMPROVED SCORING LOGIC
+        # SCORING LOGIC
         if rule_detection_count == 0:
             score = 20
             grade = 'WEAK'
@@ -238,7 +229,7 @@ class ImprovedClassifier:
             grade = 'WEAK'
             reasoning = f'Minimal detection (only {rule_detection_count} alert). Rule may be too restrictive.'
         
-        # Efficiency bonus/penalty
+        # Efficiency adjustment
         if rule_detection_count > 0 and self.current_total > 0:
             efficiency = rule_detection_count / self.current_total
             
@@ -252,12 +243,12 @@ class ImprovedClassifier:
         # Delta sanity check
         if rule_detection_count > 0 and self.delta <= 0:
             score -= 10
-            reasoning += ' ⚠️  Total alerts did not increase (possible duplicate/overlapping detection).'
+            reasoning += ' ⚠️  Total alerts unchanged (possible duplicate detection).'
         
         # Clamp score
         score = max(0, min(100, score))
         
-        # Final grade determination
+        # Final grade
         if score >= 60:
             grade = 'STRONG'
         elif score >= 40:
@@ -268,6 +259,7 @@ class ImprovedClassifier:
         result = {
             'rule_name': Path(rule_path).stem,
             'rule_path': rule_path,
+            'rule_id_from_yaml': rule_id_from_yaml,
             'classification': grade,
             'score': score,
             'reasoning': reasoning,
@@ -297,10 +289,11 @@ def parse_rule_list(rule_string: str) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Fixed rule classifier with better ID matching'
+        description='Fixed classifier - extracts rule IDs from YAML files'
     )
     parser.add_argument('--baseline-results', required=True)
     parser.add_argument('--current-results', required=True)
+    parser.add_argument('--rules-dir', required=True, help='Directory containing rule files')
     parser.add_argument('--changed-sigma-rules', default='')
     parser.add_argument('--changed-yara-rules', default='')
     parser.add_argument('--output-file', required=True)
@@ -310,6 +303,7 @@ def main():
     
     baseline_dir = Path(args.baseline_results)
     current_dir = Path(args.current_results)
+    rules_dir = Path(args.rules_dir)
     output_file = Path(args.output_file)
     
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -324,7 +318,7 @@ def main():
             'rules': []
         }
     else:
-        classifier = ImprovedClassifier(baseline_dir, current_dir)
+        classifier = WorkingClassifier(baseline_dir, current_dir, rules_dir)
         
         classifications = []
         
@@ -367,6 +361,10 @@ def main():
             print(f"   {grade}: {count}")
     
     print(f"\n✅ Report saved to: {output_file}")
+    print(f"\n💡 SCORING GUIDE:")
+    print(f"   STRONG (60-100): 10+ detections")
+    print(f"   NEUTRAL (40-59): 2-9 detections")
+    print(f"   WEAK (0-39): 0-1 detections")
 
 
 if __name__ == '__main__':
