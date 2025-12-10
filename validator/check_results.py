@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Check validation results with classification support
-Supports both old validation format and new comparison-based classification
+Check validation results with delta-based classification support
 """
 import os
 import sys
@@ -21,18 +20,18 @@ def check_results(results_dir: str, classification_report: str = None,
     print("VALIDATION & CLASSIFICATION RESULTS")
     print("="*70)
     
-    # Check if we have classification report (new method)
+    # Check if we have classification report
     if has_classification:
-        print("\n🔍 CLASSIFICATION REPORT FOUND - Using comparison-based validation")
+        print("\n📊 DELTA-BASED CLASSIFICATION REPORT FOUND")
         check_classification_report(classification_report, fail_on_bad_rules)
     
     # Also check traditional validation results if they exist
     results_file = results_path / 'validation_results.json'
     if results_file.exists():
-        print("\n📊 TRADITIONAL VALIDATION RESULTS")
+        print("\n📈 DETECTION STATISTICS")
         check_traditional_results(results_file)
     else:
-        print("\n⚠️  No traditional validation results found")
+        print("\n⚠️ No validation results file found")
     
     print("\n" + "="*70)
 
@@ -47,29 +46,43 @@ def check_classification_report(report_file: str, fail_on_bad_rules: bool):
     rules = report.get('rules', [])
     
     print("\n" + "-"*70)
-    print("📈 CLASSIFICATION SUMMARY")
+    print("📊 CLASSIFICATION SUMMARY")
     print("-"*70)
     
     total_rules = summary.get('total_rules', 0)
     avg_score = summary.get('average_score', 0)
     by_grade = summary.get('by_grade', {})
+    total_delta = summary.get('total_delta', 0)
+    baseline_detections = summary.get('baseline_detections', 0)
+    current_detections = summary.get('current_detections', 0)
     
-    print(f"\nTotal new rules analyzed: {total_rules}")
-    print(f"Average quality score: {avg_score}/100")
+    print(f"\n📌 Detection Counts:")
+    print(f"   Baseline (old rules): {baseline_detections} detections")
+    print(f"   Current (old + new): {current_detections} detections")
+    print(f"   Delta (new rules): {total_delta:+d} detections")
+    
+    print(f"\n📋 Rule Analysis:")
+    print(f"   Total new rules: {total_rules}")
+    print(f"   Average quality score: {avg_score:.1f}/100")
+    
+    if total_rules > 0:
+        avg_contribution = total_delta / total_rules
+        print(f"   Avg contribution per rule: ~{avg_contribution:.1f} detections")
     
     if by_grade:
-        print("\n📊 Grade Distribution:")
-        grade_order = ['EXCELLENT', 'GOOD', 'NEUTRAL', 'CONCERNING', 'BAD']
+        print("\n🎯 Grade Distribution:")
+        grade_order = ['STRONG', 'NEUTRAL', 'WEAK', 'ERROR']
         for grade in grade_order:
             if grade in by_grade:
                 count = by_grade[grade]
                 icon = get_grade_icon(grade)
-                print(f"  {icon} {grade:12} : {count} rule(s)")
+                pct = (count / total_rules * 100) if total_rules > 0 else 0
+                print(f"  {icon} {grade:12} : {count} rule(s) ({pct:.0f}%)")
     
     # Detailed rule results
     if rules:
         print("\n" + "-"*70)
-        print("🔍 DETAILED RULE CLASSIFICATIONS")
+        print("📋 DETAILED RULE ANALYSIS")
         print("-"*70)
         
         for rule in sorted(rules, key=lambda r: r.get('score', 0), reverse=True):
@@ -78,62 +91,65 @@ def check_classification_report(report_file: str, fail_on_bad_rules: bool):
             score = rule.get('score', 0)
             triggered = rule.get('triggered', False)
             detection_count = rule.get('detection_count', 0)
-            reasoning = rule.get('reasoning', 'No reasoning provided')
             
             icon = get_grade_icon(classification)
             
             print(f"\n{icon} {rule_name}")
             print(f"   Classification: {classification} (Score: {score}/100)")
-            print(f"   Triggered: {'Yes' if triggered else 'No'} | Detections: {detection_count}")
+            print(f"   Triggered: {'Yes ✓' if triggered else 'No ✗'}")
+            print(f"   Est. contribution: ~{detection_count} detections")
             
-            metrics = rule.get('metrics', {})
-            if metrics:
-                tp_delta = metrics.get('true_positive_delta', 0)
-                fp_delta = metrics.get('false_positive_delta', 0)
-                precision_delta = metrics.get('precision_delta', 0)
-                
-                print(f"   Impact:")
-                if tp_delta != 0:
-                    sign = '+' if tp_delta > 0 else ''
-                    print(f"     • True Positives: {sign}{tp_delta}")
-                if fp_delta != 0:
-                    sign = '+' if fp_delta > 0 else ''
-                    print(f"     • False Positives: {sign}{fp_delta}")
-                if precision_delta != 0:
-                    sign = '+' if precision_delta > 0 else ''
-                    print(f"     • Precision: {sign}{precision_delta:.2%}")
-            
-            print(f"   Reasoning: {reasoning}")
+            reasoning = rule.get('reasoning', 'No reasoning provided')
+            print(f"   Assessment: {reasoning[:200]}{'...' if len(reasoning) > 200 else ''}")
     
     # Determine overall pass/fail
-    bad_rules = by_grade.get('BAD', 0)
-    concerning_rules = by_grade.get('CONCERNING', 0)
+    weak_rules = by_grade.get('WEAK', 0)
+    error_rules = by_grade.get('ERROR', 0)
+    strong_rules = by_grade.get('STRONG', 0)
     
     print("\n" + "="*70)
     
     if fail_on_bad_rules:
-        if bad_rules > 0:
-            print(f"\n❌ VALIDATION FAILED")
-            print(f"   {bad_rules} rule(s) classified as BAD")
-            print(f"   These rules negatively impact detection quality")
+        if error_rules > 0:
+            print(f"\n❌ VALIDATION FAILED - CRITICAL ERRORS")
+            print(f"   {error_rules} rule(s) caused errors or negative impact")
+            print(f"   These rules MUST be fixed before merging")
             sys.exit(1)
-        elif concerning_rules > 0:
-            print(f"\n⚠️  VALIDATION PASSED WITH WARNINGS")
-            print(f"   {concerning_rules} rule(s) classified as CONCERNING")
-            print(f"   Review these rules for potential issues")
+        
+        elif weak_rules > 0:
+            print(f"\n⚠️ VALIDATION PASSED WITH WARNINGS")
+            print(f"   {weak_rules} rule(s) classified as WEAK")
+            print(f"   These rules generated little to no detections")
+            print(f"\n💡 Consider:")
+            print(f"   • Running diagnose_rule.py on weak rules")
+            print(f"   • Reviewing rule patterns for overly specific conditions")
+            print(f"   • Checking if log source is supported")
             sys.exit(0)
+        
+        elif strong_rules == total_rules and total_rules > 0:
+            print(f"\n✅ VALIDATION PASSED - EXCELLENT QUALITY")
+            print(f"   All {total_rules} rule(s) classified as STRONG")
+            print(f"   Total new detections: {total_delta}")
+            sys.exit(0)
+        
         else:
             print(f"\n✅ VALIDATION PASSED")
-            print(f"   All new rules meet quality standards")
+            print(f"   Rules meet minimum quality standards")
+            print(f"   Total new detections: {total_delta}")
             sys.exit(0)
+    
     else:
-        # Just report, don't fail
-        if bad_rules > 0 or concerning_rules > 0:
-            print(f"\n⚠️  QUALITY CONCERNS DETECTED")
-            print(f"   BAD: {bad_rules} | CONCERNING: {concerning_rules}")
-            print(f"   (Not failing due to fail_on_bad_rules=False)")
+        # Report-only mode
+        if error_rules > 0:
+            print(f"\n⚠️ ERRORS DETECTED (not failing due to fail_on_bad_rules=False)")
+            print(f"   {error_rules} rule(s) caused problems")
+        elif weak_rules > 0:
+            print(f"\n⚠️ WEAK RULES DETECTED (not failing due to fail_on_bad_rules=False)")
+            print(f"   {weak_rules} rule(s) generated minimal detections")
         else:
             print(f"\n✅ ALL RULES MEET QUALITY STANDARDS")
+        
+        print(f"   Total new detections: {total_delta}")
         sys.exit(0)
 
 
@@ -145,82 +161,33 @@ def check_traditional_results(results_file: Path):
     
     print("-"*70)
     
-    total_passed = results.get('total_passed', 0)
-    total_failed = results.get('total_failed', 0)
-    total_tested = total_passed + total_failed
     mode = results.get('mode', 'unknown')
+    detections = results.get('detections', [])
     
     print(f"Mode: {mode.upper()}")
-    print(f"Total rules tested: {total_tested}")
-    print(f"✅ Passed: {total_passed}")
-    print(f"❌ Failed: {total_failed}")
+    print(f"Total detections: {len(detections)}")
     
-    if total_tested > 0:
-        pass_rate = (total_passed / total_tested * 100)
-        print(f"Pass rate: {pass_rate:.1f}%")
-    
-    # Show detailed results if available
-    details = results.get('details', [])
-    if details:
-        print("\n" + "-"*70)
-        print("DETAILED RESULTS")
-        print("-"*70)
+    # Show statistics if available
+    stats = results.get('statistics', {})
+    if stats:
+        total_events = stats.get('total_events_processed', 0)
+        total_alerts = stats.get('total_alerts_generated', 0)
         
-        for detail in details:
-            status_icon = "✅" if detail.get('passed') else "❌"
-            rule_id = detail.get('rule_id', 'Unknown')
-            rule_title = detail.get('rule_title', 'Untitled')
-            
-            print(f"\n{status_icon} {rule_title}")
-            print(f"   ID: {rule_id}")
-            print(f"   Path: {detail.get('rule_path', 'N/A')}")
-            
-            if 'error' in detail:
-                print(f"   Error: {detail['error']}")
-            else:
-                detection_rate = detail.get('detection_rate', 0)
-                expected = detail.get('expected_matches', 0)
-                actual = detail.get('actual_matches', 0)
-                
-                print(f"   Detection Rate: {detection_rate}%")
-                print(f"   Expected Matches: {expected}")
-                print(f"   Actual Matches: {actual}")
-                
-                if detection_rate < 50:
-                    print(f"   ⚠️  Low detection rate - rule may need tuning")
-                elif detection_rate == 100:
-                    print(f"   🎯 Perfect detection!")
-    
-    # Check statistics
-    stats_file = results_file.parent / 'statistics.json'
-    if stats_file.exists():
-        with open(stats_file, 'r') as f:
-            stats = json.load(f)
+        print(f"Events processed: {total_events}")
+        print(f"Alerts generated: {total_alerts}")
         
-        if stats:
-            print("\n" + "-"*70)
-            print("DETECTION STATISTICS")
-            print("-"*70)
-            
-            total_events = stats.get('total_events_processed', 0)
-            total_alerts = stats.get('total_alerts_generated', 0)
-            
-            print(f"Events processed: {total_events}")
-            print(f"Alerts generated: {total_alerts}")
-            
-            if total_events > 0:
-                alert_rate = (total_alerts / total_events * 100)
-                print(f"Alert rate: {alert_rate:.2f}%")
+        if total_events > 0:
+            alert_rate = (total_alerts / total_events * 100)
+            print(f"Alert rate: {alert_rate:.2f}%")
 
 
 def get_grade_icon(grade: str) -> str:
     """Get emoji icon for grade"""
     icons = {
-        'EXCELLENT': '🌟',
-        'GOOD': '✅',
+        'STRONG': '✅',
         'NEUTRAL': '➖',
-        'CONCERNING': '⚠️',
-        'BAD': '❌'
+        'WEAK': '⚠️',
+        'ERROR': '❌'
     }
     return icons.get(grade, '❓')
 
@@ -233,7 +200,7 @@ def main():
                        help='Path to classification report JSON file')
     parser.add_argument('--fail-on-bad-rules', type=lambda x: x.lower() == 'true',
                        default=False,
-                       help='Fail if BAD rules are detected (true/false)')
+                       help='Fail if WEAK/ERROR rules are detected (true/false)')
     args = parser.parse_args()
     
     check_results(args.results_dir, args.classification_report, args.fail_on_bad_rules)
