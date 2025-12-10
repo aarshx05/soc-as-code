@@ -254,6 +254,7 @@ def main():
     parser.add_argument("--changed-yara-rules", default="")
     parser.add_argument("--synthetic-logs", default="synthetic_logs/combined/all_logs.jsonl")
     parser.add_argument("--output-file", required=True)
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     args = parser.parse_args()
 
     baseline = Path(args.baseline_results)
@@ -297,3 +298,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
