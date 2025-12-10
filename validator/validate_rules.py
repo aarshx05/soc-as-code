@@ -545,7 +545,12 @@ def main():
     parser.add_argument('--synthetic-logs-dir', help='Synthetic logs directory')
     parser.add_argument('--output-dir', default='validation_results', help='Output directory')
     parser.add_argument('--mode', choices=['baseline', 'current'], default='current')
-    args = parser.parse_args()
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+args = parser.parse_args()
+
+    if getattr(args, 'debug', False):
+        print("[DEBUG] Debug mode enabled for validate_rules.py")
 
     validator = RuleValidator(args.output_dir, mode=args.mode, 
                              synthetic_logs_dir=args.synthetic_logs_dir)

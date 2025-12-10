@@ -143,7 +143,12 @@ def main():
     parser.add_argument("--output-dir", required=True, help="Output directory for synthetic logs")
     parser.add_argument("--log-count", type=int, default=100, help="Total logs to generate")
 
-    args = parser.parse_args()
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+args = parser.parse_args()
+
+    if getattr(args, 'debug', False):
+        print("[DEBUG] Debug mode enabled for generate_logs.py")
 
     try:
         generate_synthetic_logs(args.rules_dir, args.output_dir, args.log_count)

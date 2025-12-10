@@ -229,24 +229,33 @@ def suggest_fixes(rule_path: str):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python diagnose_rule.py <rule_file>")
-        print("Example: python validator/diagnose_rule.py rules/sigma/aws4.yml")
-        sys.exit(1)
-    
-    rule_path = sys.argv[1]
-    
+    import argparse
+    parser = argparse.ArgumentParser(description='Diagnose a Sigma rule')
+    parser.add_argument('rule_path', help='Path to rule file')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
+
+    rule_path = args.rule_path
+
+    if getattr(args, 'debug', False):
+        print("[DEBUG] Debug mode enabled for diagnose_rules.py")
+
+    from pathlib import Path
+    import sys
+
     if not Path(rule_path).exists():
         print(f"❌ ERROR: Rule file not found: {rule_path}")
         sys.exit(1)
-    
+
     success = diagnose_rule(rule_path)
-    
+
     if not success:
         suggest_fixes(rule_path)
         sys.exit(1)
     else:
-        print(f"\n{'='*70}")
+        print(f"
+{'='*70}")
         print(f"✅ DIAGNOSIS COMPLETE: Rule is working!")
-        print(f"{'='*70}\n")
+        print(f"{'='*70}
+")
         sys.exit(0)

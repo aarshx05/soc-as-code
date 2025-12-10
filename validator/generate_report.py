@@ -219,7 +219,12 @@ def main():
     parser.add_argument('--output-file', required=True,
                        help='Output markdown file path')
     
-    args = parser.parse_args()
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+args = parser.parse_args()
+
+    if getattr(args, 'debug', False):
+        print("[DEBUG] Debug mode enabled for generate_report.py")
     
     try:
         generate_markdown_report(args.classification_report, args.output_file)

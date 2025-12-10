@@ -201,7 +201,12 @@ def main():
     parser.add_argument('--fail-on-bad-rules', type=lambda x: x.lower() == 'true',
                        default=False,
                        help='Fail if WEAK/ERROR rules are detected (true/false)')
-    args = parser.parse_args()
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+args = parser.parse_args()
+
+    if getattr(args, 'debug', False):
+        print("[DEBUG] Debug mode enabled for check_results.py")
     
     check_results(args.results_dir, args.classification_report, args.fail_on_bad_rules)
 
