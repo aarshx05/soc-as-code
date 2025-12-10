@@ -72,7 +72,8 @@ jobs:
             python validator/generate_logs.py \
               --rules-dir rules/sigma \
               --output-dir synthetic_logs/baseline \
-              --log-count 100
+              --log-count 100 \
+              --include-new
             echo "Generated baseline logs from OLD rules"
           else
             echo "No OLD Sigma rules found, creating empty baseline"
@@ -306,5 +307,6 @@ jobs:
                 body: summary
               });
             }
+
 
 
